@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8"/>
+    <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+    <title>DiskVisor</title>
+</head>
+<body>
+<div id="app">
+  <!-- Toolbar -->
+  <div id="toolbar">
+    <button id="browse-btn" class="btn btn-secondary">浏览...</button>
+    <span id="path-display" class="path-display">未选择目录</span>
+    <button id="scan-btn" class="btn btn-primary" disabled>扫描</button>
+    <div id="scan-status"></div>
+    <div class="toolbar-spacer"></div>
+    <button id="settings-btn" class="btn btn-secondary icon-btn" title="设置">
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M8 4.754a3.246 3.246 0 1 0 0 6.492 3.246 3.246 0 0 0 0-6.492zM5.754 8a2.246 2.246 0 1 1 4.492 0 2.246 2.246 0 0 1-4.492 0z"/>
+        <path d="M9.796 1.343c-.527-1.79-3.065-1.79-3.592 0l-.094.319a.873.873 0 0 1-1.255.52l-.292-.16c-1.64-.892-3.433.902-2.54 2.541l.159.292a.873.873 0 0 1-.52 1.255l-.319.094c-1.79.527-1.79 3.065 0 3.592l.319.094a.873.873 0 0 1 .52 1.255l-.16.292c-.892 1.64.901 3.434 2.541 2.54l.292-.159a.873.873 0 0 1 1.255.52l.094.319c.527 1.79 3.065 1.79 3.592 0l.094-.319a.873.873 0 0 1 1.255-.52l.292.16c1.64.893 3.434-.902 2.54-2.541l-.159-.292a.873.873 0 0 1 .52-1.255l.319-.094c1.79-.527 1.79-3.065 0-3.592l-.319-.094a.873.873 0 0 1-.52-1.255l.16-.292c.893-1.64-.902-3.433-2.541-2.54l-.292.159a.873.873 0 0 1-1.255-.52l-.094-.319z"/>
+      </svg>
+    </button>
+  </div>
+
+  <!-- Scan progress bar -->
+  <div id="scan-progress" class="scan-progress" style="display:none;">
+    <div class="scan-progress-info">
+      <span id="scan-progress-text">扫描中...</span>
+      <span id="scan-progress-stats"></span>
+    </div>
+    <div class="scan-progress-bar-track">
+      <div class="scan-progress-bar-fill"></div>
+    </div>
+  </div>
+
+  <!-- Main area: tree + AI panel -->
+  <div id="main-area">
+    <!-- Left: directory tree -->
+    <div id="tree-panel">
+      <div id="tree-header" class="panel-header">
+        <span>目录树</span>
+        <span id="scan-summary"></span>
+      </div>
+      <div id="tree-body"></div>
+    </div>
+
+    <!-- Right: AI details -->
+    <div id="ai-panel">
+      <div id="ai-header" class="panel-header">
+        <span>AI 文件详情</span>
+        <span id="ai-selected"></span>
+      </div>
+      <div id="ai-body">
+        <div class="ai-placeholder">选中一个文件或文件夹查看详情</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Treemap -->
+  <div id="treemap-panel">
+    <div id="treemap-header" class="panel-header">
+      <span>Treemap 矩形树图</span>
+      <span id="treemap-nav" class="treemap-nav" style="display:none;">
+        <span class="treemap-crumb"></span>
+        <button id="treemap-up" class="btn btn-secondary btn-sm">↑ 上级</button>
+      </span>
+    </div>
+    <canvas id="treemap-canvas"></canvas>
+  </div>
+
+  <!-- Action bar -->
+  <div id="action-bar">
+    <button id="recycle-btn" class="btn btn-danger" disabled>移到回收站</button>
+    <button id="explorer-btn" class="btn btn-secondary" disabled>打开位置</button>
+    <button id="uninstall-btn" class="btn btn-secondary" disabled>卸载程序</button>
+    <div id="action-info"></div>
+  </div>
+</div>
+
+<!-- Settings Modal -->
+<div id="settings-modal" class="modal-overlay" style="display:none;">
+  <div class="modal">
+    <div class="modal-header">
+      <span>设置</span>
+      <button id="settings-close" class="btn btn-secondary icon-btn">✕</button>
+    </div>
+    <div class="modal-body">
+      <!-- AI config section (Path A: direct) -->
+      <div class="settings-section">
+        <div class="settings-section-title">方式一：自带 AI API Key（直连）</div>
+        <div class="settings-desc">填写你自己的 AI API Key，软件直接调用你的 AI 端点，不经过任何中间服务器。优先使用此方式。</div>
+        <div class="form-row">
+          <label>API Base URL</label>
+          <input id="cfg-ai-base-url" type="text" placeholder="https://api.openai.com/v1"/>
+        </div>
+        <div class="form-row">
+          <label>API Key</label>
+          <input id="cfg-ai-api-key" type="password" placeholder="sk-..."/>
+        </div>
+        <div class="form-row">
+          <label>模型名称</label>
+          <input id="cfg-ai-model" type="text" placeholder="gpt-4o-mini"/>
+        </div>
+      </div>
+
+      <div class="settings-divider"></div>
+
+      <!-- License section (Path B: proxy) -->
+      <div class="settings-section">
+        <div class="settings-section-title">方式二：License 授权（网站代理）</div>
+        <div class="settings-desc">没有自己的 AI Key？从网站申请 License，软件把提示词发到网站后端，网站用自己的 AI Key 转发。仅在上面的 AI Key 为空时生效。</div>
+        <div class="form-row">
+          <label>License Key</label>
+          <input id="cfg-license-key" type="text" placeholder="输入你的 License Key"/>
+        </div>
+        <div class="form-row-inline">
+          <button id="license-validate-btn" class="btn btn-primary btn-sm">验证 License</button>
+          <span id="license-status" class="license-status"></span>
+        </div>
+      </div>
+
+      <div class="settings-divider"></div>
+
+      <!-- Website API section -->
+      <div class="settings-section">
+        <div class="settings-section-title">网站 API 地址</div>
+        <div class="settings-desc">License 验证和提示词代理转发均通过此地址。通常无需修改。</div>
+        <div class="form-row">
+          <label>Website API URL</label>
+          <input id="cfg-website-url" type="text" placeholder="https://your-server.example.com/api/diskvisor"/>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button id="settings-save" class="btn btn-primary">保存设置</button>
+      <button id="settings-cancel" class="btn btn-secondary">取消</button>
+    </div>
+  </div>
+</div>
+
+<script src="./src/main.js" type="module"></script>
+</body>
+</html>

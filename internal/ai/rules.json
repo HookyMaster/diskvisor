@@ -1,0 +1,569 @@
+{
+  "rules": [
+    {
+      "id": "crashdumps",
+      "match_type": "name_equals",
+      "pattern": "CrashDumps",
+      "safety": "safe",
+      "category": "System Cache",
+      "description": "Windows 崩溃转储目录，存放程序崩溃时自动生成的内存快照文件（.dmp）。",
+      "recommendation": "可安全删除。这些文件仅用于事后调试，删除不影响任何正在运行的程序。",
+      "action": "delete"
+    },
+    {
+      "id": "crash_report_client",
+      "match_type": "name_equals",
+      "pattern": "CrashReportClient",
+      "safety": "safe",
+      "category": "System Cache",
+      "description": "Windows 错误报告客户端的本地数据缓存。",
+      "recommendation": "可安全删除。仅包含历史崩溃报告摘要。",
+      "action": "delete"
+    },
+    {
+      "id": "temp_dir",
+      "match_type": "name_equals",
+      "pattern": "Temp",
+      "safety": "safe",
+      "category": "System Cache",
+      "description": "Windows 临时文件目录。安装包、编译中间产物、程序运行时临时文件常存于此。",
+      "recommendation": "可安全删除。部分文件可能正在被占用，跳过即可，重启后可删干净。",
+      "action": "delete"
+    },
+    {
+      "id": "d3dscache",
+      "match_type": "name_equals",
+      "pattern": "D3DSCache",
+      "safety": "safe",
+      "category": "GPU Cache",
+      "description": "Direct3D 着色器编译缓存。游戏和 3D 程序首次运行时编译着色器并缓存于此，加速后续启动。",
+      "recommendation": "可安全删除。删除后游戏首次启动会重新编译着色器，略慢一次。",
+      "action": "delete"
+    },
+    {
+      "id": "icon_cache",
+      "match_type": "name_equals",
+      "pattern": "IconCache.db",
+      "safety": "safe",
+      "category": "System Cache",
+      "description": "Windows 图标缓存数据库，加速资源管理器中图标的显示。",
+      "recommendation": "可安全删除。系统会自动重建。",
+      "action": "delete"
+    },
+    {
+      "id": "temp_internet_files",
+      "match_type": "name_equals",
+      "pattern": "Temporary Internet Files",
+      "safety": "safe",
+      "category": "Browser Cache",
+      "description": "Internet Explorer / 旧版 Edge 的网页缓存残留。",
+      "recommendation": "可安全删除。",
+      "action": "delete"
+    },
+    {
+      "id": "wer_report_queue",
+      "match_type": "name_equals",
+      "pattern": "ReportQueue",
+      "safety": "safe",
+      "category": "System Cache",
+      "description": "Windows Error Reporting (WER) 报告队列，存放待上传的错误报告。",
+      "recommendation": "可安全删除。",
+      "action": "delete"
+    },
+    {
+      "id": "wer_report_archive",
+      "match_type": "name_equals",
+      "pattern": "ReportArchive",
+      "safety": "safe",
+      "category": "System Cache",
+      "description": "Windows Error Reporting (WER) 归档报告，存放已上传的错误报告副本。",
+      "recommendation": "可安全删除。",
+      "action": "delete"
+    },
+    {
+      "id": "npm_cache",
+      "match_type": "name_equals",
+      "pattern": "npm-cache",
+      "safety": "safe",
+      "category": "Dev Cache",
+      "description": "npm 包管理器的全局缓存目录。下载过的包会缓存于此，加速后续安装。",
+      "recommendation": "可安全删除。运行 npm cache clean --force 可达同样效果。",
+      "action": "delete"
+    },
+    {
+      "id": "pnpm_cache",
+      "match_type": "name_equals",
+      "pattern": "pnpm-cache",
+      "safety": "safe",
+      "category": "Dev Cache",
+      "description": "pnpm 包管理器的全局缓存。pnpm 使用硬链接复用此缓存。",
+      "recommendation": "可安全删除。运行 pnpm store prune 可清理无用包。",
+      "action": "delete"
+    },
+    {
+      "id": "pnpm_state",
+      "match_type": "name_equals",
+      "pattern": "pnpm-state",
+      "safety": "safe",
+      "category": "Dev Cache",
+      "description": "pnpm 的状态文件目录。",
+      "recommendation": "可安全删除。",
+      "action": "delete"
+    },
+    {
+      "id": "pip_cache",
+      "match_type": "name_equals",
+      "pattern": "pip",
+      "path_hint": "AppData\\Local\\pip",
+      "safety": "safe",
+      "category": "Dev Cache",
+      "description": "Python pip 包管理器的缓存目录。",
+      "recommendation": "可安全删除。运行 pip cache purge 可达同样效果。",
+      "action": "delete"
+    },
+    {
+      "id": "go_build_cache",
+      "match_type": "name_equals",
+      "pattern": "go-build",
+      "safety": "safe",
+      "category": "Dev Cache",
+      "description": "Go 语言编译缓存。编译过的包会缓存于此，加速后续编译。",
+      "recommendation": "可安全删除。运行 go clean -cache 可达同样效果。",
+      "action": "delete"
+    },
+    {
+      "id": "node_gyp_cache",
+      "match_type": "name_equals",
+      "pattern": "node-gyp",
+      "safety": "safe",
+      "category": "Dev Cache",
+      "description": "node-gyp 的缓存目录，存放编译 Node.js 原生模块时的头文件。",
+      "recommendation": "可安全删除。下次编译原生模块时会重新下载。",
+      "action": "delete"
+    },
+    {
+      "id": "nuget_cache",
+      "match_type": "name_equals",
+      "pattern": "NuGet",
+      "path_hint": "AppData\\Local",
+      "safety": "safe",
+      "category": "Dev Cache",
+      "description": "NuGet 包管理器的缓存。",
+      "recommendation": "可安全删除。运行 dotnet nuget locals all --clear 可达同样效果。",
+      "action": "delete"
+    },
+    {
+      "id": "gradle_cache",
+      "match_type": "name_equals",
+      "pattern": "gradle",
+      "path_hint": "AppData\\Local",
+      "safety": "safe",
+      "category": "Dev Cache",
+      "description": "Gradle 构建工具的缓存目录，包含下载的依赖和构建缓存。",
+      "recommendation": "可安全删除。删除后下次构建会重新下载依赖。",
+      "action": "delete"
+    },
+    {
+      "id": "maven_cache",
+      "match_type": "name_equals",
+      "pattern": ".m2",
+      "safety": "caution",
+      "category": "Dev Cache",
+      "description": "Maven 的本地仓库，存放 Java 依赖包。",
+      "recommendation": "可删除但下次构建需重新下载所有依赖。建议只清理旧版本。",
+      "action": "delete"
+    },
+    {
+      "id": "cargo_cache",
+      "match_type": "name_equals",
+      "pattern": "cargo",
+      "path_hint": "\\.cargo",
+      "safety": "caution",
+      "category": "Dev Cache",
+      "description": "Rust Cargo 的注册表和源码缓存。",
+      "recommendation": "可删除但下次编译需重新下载依赖。运行 cargo cache -a 可自动清理。",
+      "action": "delete"
+    },
+    {
+      "id": "nv_dx_cache",
+      "match_type": "name_equals",
+      "pattern": "DXCache",
+      "safety": "safe",
+      "category": "GPU Cache",
+      "description": "NVIDIA DirectX 着色器缓存。",
+      "recommendation": "可安全删除。驱动会自动重建。",
+      "action": "delete"
+    },
+    {
+      "id": "nv_gl_cache",
+      "match_type": "name_equals",
+      "pattern": "GLCache",
+      "safety": "safe",
+      "category": "GPU Cache",
+      "description": "NVIDIA OpenGL 着色器缓存。",
+      "recommendation": "可安全删除。驱动会自动重建。",
+      "action": "delete"
+    },
+    {
+      "id": "nv_compute_cache",
+      "match_type": "name_equals",
+      "pattern": "ComputeCache",
+      "safety": "safe",
+      "category": "GPU Cache",
+      "description": "NVIDIA CUDA 计算缓存。",
+      "recommendation": "可安全删除。",
+      "action": "delete"
+    },
+    {
+      "id": "windows_old",
+      "match_type": "name_equals",
+      "pattern": "Windows.old",
+      "safety": "safe",
+      "category": "System",
+      "description": "Windows 大版本更新后保留的旧系统文件。用于回滚到上一个版本。",
+      "recommendation": "如果不需要回滚，可安全删除。建议通过「磁盘清理」工具删除。",
+      "action": "delete"
+    },
+    {
+      "id": "software_distribution_download",
+      "match_type": "name_equals",
+      "pattern": "Download",
+      "path_hint": "SoftwareDistribution",
+      "safety": "safe",
+      "category": "System Cache",
+      "description": "Windows Update 下载的更新安装包缓存。",
+      "recommendation": "可安全删除。已安装的更新不受影响。",
+      "action": "delete"
+    },
+    {
+      "id": "delivery_optimization",
+      "match_type": "name_equals",
+      "pattern": "DeliveryOptimization",
+      "safety": "safe",
+      "category": "System Cache",
+      "description": "Windows 传递优化缓存，用于 P2P 分发更新包。",
+      "recommendation": "可安全删除。",
+      "action": "delete"
+    },
+    {
+      "id": "prefetch",
+      "match_type": "name_equals",
+      "pattern": "Prefetch",
+      "safety": "caution",
+      "category": "System Cache",
+      "description": "Windows 预读取缓存，记录程序启动时加载的文件以加速启动。",
+      "recommendation": "可删除但会暂时降低程序启动速度。系统会自动重建。",
+      "action": "delete"
+    },
+    {
+      "id": "thumbs_db",
+      "match_type": "name_equals",
+      "pattern": "thumbs.db",
+      "safety": "safe",
+      "category": "System Cache",
+      "description": "文件夹缩略图缓存文件。",
+      "recommendation": "可安全删除。系统会自动重建。",
+      "action": "delete"
+    },
+    {
+      "id": "hiberfil_sys",
+      "match_type": "name_equals",
+      "pattern": "hiberfil.sys",
+      "safety": "caution",
+      "category": "System",
+      "description": "Windows 休眠文件。休眠时将内存内容写入此文件。大小约等于物理内存大小。",
+      "recommendation": "如不需要休眠功能，运行 powercfg /hibernate off 可关闭并自动删除此文件。也可用 powercfg /hibernate /size 50 压缩到内存大小的 50%。",
+      "action": "command",
+      "command": "powercfg /hibernate off"
+    },
+    {
+      "id": "pagefile_sys",
+      "match_type": "name_equals",
+      "pattern": "pagefile.sys",
+      "safety": "danger",
+      "category": "System",
+      "description": "Windows 虚拟内存（页面文件）。当物理内存不足时，系统将不活跃的内存页写入此文件。",
+      "recommendation": "不建议删除。关闭虚拟内存会导致部分程序无法运行、系统蓝屏时无法生成转储。如需释放 C 盘空间，可通过系统设置将页面文件移到其他盘。",
+      "action": "keep"
+    },
+    {
+      "id": "swapfile_sys",
+      "match_type": "name_equals",
+      "pattern": "swapfile.sys",
+      "safety": "danger",
+      "category": "System",
+      "description": "Windows 8+ 引入的轻量交换文件，用于 UWP 应用内存交换。",
+      "recommendation": "不建议删除。系统自动管理大小。",
+      "action": "keep"
+    },
+    {
+      "id": "ntuser_dat",
+      "match_type": "name_equals",
+      "pattern": "NTUSER.DAT",
+      "safety": "danger",
+      "category": "System",
+      "description": "Windows 用户注册表配置文件。包含当前用户的所有注册表设置。",
+      "recommendation": "绝对不要删除。删除会导致用户配置文件损坏，无法登录。",
+      "action": "keep"
+    },
+    {
+      "id": "windows_dir",
+      "match_type": "name_equals",
+      "pattern": "Windows",
+      "path_hint": "C:\\Windows",
+      "safety": "danger",
+      "category": "System",
+      "description": "Windows 操作系统核心目录，包含系统文件、驱动、组件等。",
+      "recommendation": "绝对不要删除。可通过「磁盘清理」清理其中的缓存。",
+      "action": "keep"
+    },
+    {
+      "id": "program_files",
+      "match_type": "name_equals",
+      "pattern": "Program Files",
+      "safety": "danger",
+      "category": "Software",
+      "description": "已安装软件的目录（64位程序）。",
+      "recommendation": "不要直接删除。如需释放空间，请使用对应软件的卸载程序。",
+      "action": "uninstall"
+    },
+    {
+      "id": "program_files_x86",
+      "match_type": "name_equals",
+      "pattern": "Program Files (x86)",
+      "safety": "danger",
+      "category": "Software",
+      "description": "已安装软件的目录（32位程序）。",
+      "recommendation": "不要直接删除。如需释放空间，请使用对应软件的卸载程序。",
+      "action": "uninstall"
+    },
+    {
+      "id": "programdata",
+      "match_type": "name_equals",
+      "pattern": "ProgramData",
+      "safety": "danger",
+      "category": "System",
+      "description": "所有用户共享的应用数据目录。包含软件的全局配置、许可证等。",
+      "recommendation": "不要整体删除。其中部分缓存子目录可清理，但需逐个确认。",
+      "action": "keep"
+    },
+    {
+      "id": "node_modules",
+      "match_type": "name_equals",
+      "pattern": "node_modules",
+      "safety": "caution",
+      "category": "Dev Cache",
+      "description": "Node.js 项目的依赖包目录。通常体积庞大。",
+      "recommendation": "如果项目不再使用，可安全删除。如项目仍在开发，删除后需运行 npm install / pnpm install 重新安装依赖。",
+      "action": "delete"
+    },
+    {
+      "id": "git_objects",
+      "match_type": "name_equals",
+      "pattern": "objects",
+      "path_hint": "\\.git\\objects",
+      "safety": "caution",
+      "category": "Dev Cache",
+      "description": "Git 仓库的对象数据库，存储所有提交、树和 blob 对象。",
+      "recommendation": "可运行 git gc --aggressive 清理无用对象。不要直接删除目录。",
+      "action": "keep"
+    },
+    {
+      "id": "vscode_cache",
+      "match_type": "name_equals",
+      "pattern": "Cache",
+      "path_hint": "AppData\\Local\\Microsoft\\vscode",
+      "safety": "safe",
+      "category": "Dev Cache",
+      "description": "VS Code 的缓存数据。",
+      "recommendation": "可安全删除。VS Code 会自动重建。",
+      "action": "delete"
+    },
+    {
+      "id": "jetbrains_caches",
+      "match_type": "name_equals",
+      "pattern": "caches",
+      "path_hint": "AppData\\Local\\JetBrains",
+      "safety": "safe",
+      "category": "Dev Cache",
+      "description": "JetBrains IDE（IntelliJ IDEA / WebStorm 等）的缓存目录。包含索引、编译输出等。",
+      "recommendation": "可安全删除。IDE 会自动重建索引。建议在 IDE 关闭后删除。",
+      "action": "delete"
+    },
+    {
+      "id": "jetbrains_log",
+      "match_type": "name_equals",
+      "pattern": "log",
+      "path_hint": "AppData\\Local\\JetBrains",
+      "safety": "safe",
+      "category": "Dev Cache",
+      "description": "JetBrains IDE 的日志文件。",
+      "recommendation": "可安全删除。",
+      "action": "delete"
+    },
+    {
+      "id": "docker_desktop",
+      "match_type": "name_equals",
+      "pattern": "Docker",
+      "path_hint": "AppData\\Local\\Docker",
+      "safety": "caution",
+      "category": "Software Data",
+      "description": "Docker Desktop 的本地数据目录，包含镜像、容器、卷等。",
+      "recommendation": "不要直接删除目录。运行 docker system prune -a 可清理无用镜像和容器。如需完全释放空间，通过 Docker Desktop 设置清理。",
+      "action": "keep"
+    },
+    {
+      "id": "wsl_vhdx",
+      "match_type": "ext_equals",
+      "pattern": ".vhdx",
+      "safety": "caution",
+      "category": "Software Data",
+      "description": "WSL (Windows Subsystem for Linux) 的虚拟磁盘文件。WSL 的所有文件系统数据存储于此。",
+      "recommendation": "不要直接删除。可通过 wsl --uninstall 卸载 WSL，或用 wsl --manage <distro> --set-sparse true 压缩磁盘。",
+      "action": "keep"
+    },
+    {
+      "id": "dmp_files",
+      "match_type": "ext_equals",
+      "pattern": ".dmp",
+      "safety": "safe",
+      "category": "System Cache",
+      "description": "崩溃转储文件。程序崩溃时生成的内存快照。",
+      "recommendation": "可安全删除。除非需要调试某个特定崩溃。",
+      "action": "delete"
+    },
+    {
+      "id": "log_files",
+      "match_type": "ext_equals",
+      "pattern": ".log",
+      "safety": "safe",
+      "category": "System Cache",
+      "description": "日志文件。程序运行时生成的记录文件。",
+      "recommendation": "通常可安全删除。部分程序正在写入的日志可能被占用，跳过即可。",
+      "action": "delete"
+    },
+    {
+      "id": "tmp_files",
+      "match_type": "ext_equals",
+      "pattern": ".tmp",
+      "safety": "safe",
+      "category": "System Cache",
+      "description": "临时文件。程序运行时产生的中间文件。",
+      "recommendation": "可安全删除。正在被占用的文件跳过即可。",
+      "action": "delete"
+    },
+    {
+      "id": "bak_files",
+      "match_type": "ext_equals",
+      "pattern": ".bak",
+      "safety": "caution",
+      "category": "Misc",
+      "description": "备份文件。可能是重要数据的备份。",
+      "recommendation": "确认无需后再删除。部分 .bak 文件可能是配置或数据库的备份。",
+      "action": "delete"
+    },
+    {
+      "id": "old_files",
+      "match_type": "ext_equals",
+      "pattern": ".old",
+      "safety": "caution",
+      "category": "Misc",
+      "description": "旧版本文件。通常是软件更新时保留的上一版本。",
+      "recommendation": "确认软件运行正常后可删除。",
+      "action": "delete"
+    },
+    {
+      "id": "electron_cache",
+      "match_type": "name_equals",
+      "pattern": "electron",
+      "path_hint": "AppData\\Local\\electron",
+      "safety": "safe",
+      "category": "Dev Cache",
+      "description": "Electron 开发框架的缓存，存放下载的 Electron 二进制文件。",
+      "recommendation": "可安全删除。下次构建 Electron 应用时会重新下载。",
+      "action": "delete"
+    },
+    {
+      "id": "squirrel_temp",
+      "match_type": "name_equals",
+      "pattern": "SquirrelTemp",
+      "safety": "safe",
+      "category": "System Cache",
+      "description": "Squirrel（Electron 自动更新框架）的临时文件。",
+      "recommendation": "可安全删除。",
+      "action": "delete"
+    },
+    {
+      "id": "package_cache",
+      "match_type": "name_equals",
+      "pattern": "Package Cache",
+      "safety": "caution",
+      "category": "System Cache",
+      "description": "Windows Installer / ClickOnce 的包缓存。用于后续修复、卸载操作。",
+      "recommendation": "不建议删除。删除后部分软件可能无法卸载或修复。",
+      "action": "keep"
+    },
+    {
+      "id": "packages_uwp",
+      "match_type": "name_equals",
+      "pattern": "Packages",
+      "path_hint": "AppData\\Local\\Packages",
+      "safety": "danger",
+      "category": "Software Data",
+      "description": "UWP / Microsoft Store 应用的沙箱数据目录。每个商店应用一个子包。",
+      "recommendation": "不要整体删除。如需清理某个应用，通过「设置 > 应用」卸载对应应用。",
+      "action": "keep"
+    },
+    {
+      "id": "virtualstore",
+      "match_type": "name_equals",
+      "pattern": "VirtualStore",
+      "safety": "caution",
+      "category": "System",
+      "description": "UAC 虚拟化存储。老程序写 Program Files 被重定向到这里。",
+      "recommendation": "检查内容后可清理。部分老软件可能依赖其中的数据。",
+      "action": "delete"
+    },
+    {
+      "id": "isolated_storage",
+      "match_type": "name_equals",
+      "pattern": "IsolatedStorage",
+      "safety": "caution",
+      "category": "Software Data",
+      "description": ".NET 程序的隔离存储区。",
+      "recommendation": "删除可能导致某些 .NET 程序丢失数据。确认无重要数据后可删。",
+      "action": "delete"
+    },
+    {
+      "id": "diagnostics",
+      "match_type": "name_equals",
+      "pattern": "Diagnostics",
+      "path_hint": "AppData\\Local\\Diagnostics",
+      "safety": "safe",
+      "category": "System Cache",
+      "description": "Windows 诊断数据本地缓存。",
+      "recommendation": "可安全删除。",
+      "action": "delete"
+    },
+    {
+      "id": "elevated_diagnostics",
+      "match_type": "name_equals",
+      "pattern": "ElevatedDiagnostics",
+      "safety": "safe",
+      "category": "System Cache",
+      "description": "Windows 提权诊断结果缓存。",
+      "recommendation": "可安全删除。",
+      "action": "delete"
+    },
+    {
+      "id": "fontconfig_cache",
+      "match_type": "name_equals",
+      "pattern": "fontconfig",
+      "safety": "safe",
+      "category": "System Cache",
+      "description": "字体配置缓存。",
+      "recommendation": "可安全删除。会自动重建。",
+      "action": "delete"
+    }
+  ]
+}

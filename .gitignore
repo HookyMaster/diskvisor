@@ -1,0 +1,12 @@
+# Wails 构建产物
+build/bin
+
+# 前端依赖和构建输出
+node_modules
+frontend/dist
+frontend/package.json.md5
+
+# IDE / 编辑器
+.idea/
+.vscode/
+*.swp
