@@ -9,11 +9,15 @@ export function AnalyzePath(arg1:string):Promise<ai.AnalysisResult>;
 
 export function BrowseDirectory():Promise<string>;
 
+export function ClearAICache():Promise<void>;
+
 export function GetChildren(arg1:string):Promise<Array<scanner.FileNode>>;
 
 export function GetCommonPaths():Promise<Record<string, string>>;
 
 export function GetConfig():Promise<config.Config>;
+
+export function GetMediaPreview(arg1:string):Promise<main.MediaPreview>;
 
 export function MoveToRecycleBin(arg1:string):Promise<void>;
 

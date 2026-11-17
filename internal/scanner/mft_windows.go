@@ -62,6 +62,11 @@ func (s *Scanner) tryScanMFT(rootPath string) (*FileNode, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Sequential raw reads are safe only after verifying the MFT occupies one
+	// extent. Unsupported or fragmented volumes use the directory walker.
+	if err := verifyContiguousMFT(rootPath, vd); err != nil {
+		return nil, err
+	}
 
 	entries, err := s.readMFT(hVol, vd)
 	if err != nil {
@@ -116,19 +121,7 @@ func getNTFSVolumeData(hVol windows.Handle) (ntfsVolumeData, error) {
 	if err != nil {
 		return ntfsVolumeData{}, err
 	}
-	le := binary.LittleEndian
-	vd := ntfsVolumeData{
-		bytesPerCluster: int64(le.Uint64(out[0x30:0x38])),       // BytesPerCluster
-		recordSize:      int(int64(le.Uint64(out[0x38:0x40]))),  // BytesPerFileRecordSegment
-		mftValidLen:     int64(le.Uint64(out[0x48:0x50])),       // MftValidDataLength
-		mftStartLCN:     int64(le.Uint64(out[0x50:0x58])),       // MftStartLcn
-	}
-	if vd.recordSize < 0 {
-		vd.recordSize = 1 << uint(-vd.recordSize)
-	} else if vd.recordSize == 0 {
-		vd.recordSize = 1024
-	}
-	return vd, nil
+	return decodeNTFSVolumeData(out[:bytesReturned])
 }
 
 // getFileReferenceNumber returns the NTFS file reference number (FRN) of path,
@@ -172,18 +165,28 @@ func (s *Scanner) readMFT(hVol windows.Handle, vd ntfsVolumeData) (map[uint64]*m
 	const blockSize = 8 * 1024 * 1024
 	buf := make([]byte, blockSize)
 	recordsPerBlock := blockSize / vd.recordSize
+	if recordsPerBlock == 0 {
+		return nil, errors.New("MFT record exceeds block size")
+	}
 
 	for recIdx := int64(0); recIdx < totalRecords; recIdx += int64(recordsPerBlock) {
 		readOffset := mftStartByte + recIdx*int64(vd.recordSize)
-		n, err := readAt(hVol, readOffset, buf)
-		if err != nil || n < vd.recordSize {
+		want := len(buf)
+		if remaining := vd.mftValidLen - recIdx*int64(vd.recordSize); remaining < int64(want) {
+			want = int(remaining)
+		}
+		n, err := readAt(hVol, readOffset, buf[:want])
+		if err != nil || n != want {
 			// Stop on a read error or a short read — the rest would be garbage.
-			break
+			return nil, errors.New("incomplete MFT read")
 		}
 		count := n / vd.recordSize
 		for i := 0; i < count && recIdx+int64(i) < totalRecords; i++ {
 			base := i * vd.recordSize
-			e := parseRecord(buf[base:base+vd.recordSize], uint64(recIdx)+uint64(i))
+			record := buf[base:base+vd.recordSize]
+			if binary.LittleEndian.Uint32(record[:4]) != 0x454c4946 { continue }
+			if !restoreRecordSectors(record) { return nil, errors.New("MFT sector fixup failed") }
+			e := parseRecord(record, uint64(recIdx)+uint64(i))
 			if e != nil && e.inUse && e.name != "" {
 				entries[e.frn] = e
 			}
@@ -193,6 +196,29 @@ func (s *Scanner) readMFT(hVol windows.Handle, vd ntfsVolumeData) (map[uint64]*m
 		}
 	}
 	return entries, nil
+}
+
+func verifyContiguousMFT(path string, vd ntfsVolumeData) error {
+	h, err := windows.CreateFile(windows.StringToUTF16Ptr(path[:2]+`\$MFT`), windows.FILE_READ_ATTRIBUTES,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, 0, 0)
+	if err != nil {
+		return err
+	}
+	defer windows.Close(h)
+	input := make([]byte, 8)
+	out := make([]byte, 4096)
+	var n uint32
+	const fsctlGetRetrievalPointers = 0x00090073
+	if err := windows.DeviceIoControl(h, fsctlGetRetrievalPointers, &input[0], 8, &out[0], uint32(len(out)), &n, nil); err != nil {
+		return err
+	}
+	le := binary.LittleEndian
+	if n < 32 || le.Uint32(out[:4]) != 1 || le.Uint64(out[8:16]) != 0 ||
+		int64(le.Uint64(out[24:32])) != vd.mftStartLCN ||
+		le.Uint64(out[16:24]) < uint64((vd.mftValidLen+vd.bytesPerCluster-1)/vd.bytesPerCluster) {
+		return errors.New("fragmented or unverifiable MFT; use directory scan")
+	}
+	return nil
 }
 
 // readAt seeks to offset on the volume handle and fills buf (handling partial

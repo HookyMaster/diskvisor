@@ -54,5 +54,8 @@ func moveToRecycleBinNative(absPath string) error {
 	if r != 0 {
 		return fmt.Errorf("SHFileOperation failed (code %d)", r)
 	}
+	if op.fAnyOperationsAborted != 0 {
+		return fmt.Errorf("recycle operation was aborted")
+	}
 	return nil
 }

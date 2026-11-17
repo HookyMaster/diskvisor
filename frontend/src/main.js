@@ -1,4 +1,9 @@
 import "./style.css";
+import "./ui.css";
+import { FILE_KINDS, getFileKind, createFileIcon } from "./file-colors.mjs";
+import { createTreeStore } from "./tree-store.mjs";
+import { createFrameBatcher, createSelectionJobs } from "./interaction-jobs.mjs";
+import { showMediaPreview, resetMediaPreview } from "./media-preview.js";
 import {
   Scan,
   AnalyzePath,
@@ -21,6 +26,15 @@ let treemapRects = [];
 // Registry of live tree-row states, keyed by path. Used by revealTreePath()
 // to expand ancestor rows when the Treemap drives the selection.
 const treeRowStates = new Map();
+let selectedTreeRow = null;
+let contextTarget = null;
+let contextReturnFocus = null;
+let scanGeneration = 0;
+const treeStore = createTreeStore(async (path) => {
+  const children = await GetChildren(path);
+  tmLayoutDirty = true;
+  return children;
+}, pathKey);
 
 // --- Path helpers (Windows-aware, case-insensitive) ---
 
@@ -50,6 +64,21 @@ function pathSegments(path, rootPath) {
 }
 
 async function init() {
+  const legend = document.getElementById("file-color-legend");
+  for (const kind of FILE_KINDS) {
+    const item = document.createElement("span");
+    item.className = "file-color-key";
+    item.setAttribute("role", "listitem");
+    const dot = document.createElement("i");
+    dot.style.backgroundColor = kind.color;
+    dot.setAttribute("aria-hidden", "true");
+    item.append(dot, document.createTextNode(kind.label));
+    legend.append(item);
+  }
+  const explanation = document.createElement("span");
+  explanation.className = "file-color-explanation";
+  explanation.textContent = "颜色表示文件类型，不代表清理安全等级";
+  legend.append(explanation);
   document.getElementById("browse-btn").addEventListener("click", doBrowse);
   document.getElementById("scan-btn").addEventListener("click", doScan);
 
@@ -69,7 +98,29 @@ async function init() {
 
   const canvas = document.getElementById("treemap-canvas");
   canvas.addEventListener("click", onTreemapClick);
-  document.getElementById("treemap-up").addEventListener("click", treemapHome);
+  canvas.addEventListener("dblclick", onTreemapDoubleClick);
+  canvas.tabIndex = 0;
+  canvas.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    const hit = treemapHit(event);
+    if (hit?.node.path) openContextMenu(event, hit.node, "treemap");
+    else hideContextMenu();
+  });
+  document.addEventListener("pointerdown", (event) => {
+    if (!document.getElementById("file-context-menu").contains(event.target)) hideContextMenu();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") hideContextMenu(true);
+  });
+  document.addEventListener("scroll", (event) => {
+    if (!document.getElementById("file-context-menu").contains(event.target)) hideContextMenu();
+  }, true);
+  window.addEventListener("resize", () => hideContextMenu());
+  document.getElementById("file-context-menu").addEventListener("keydown", onContextMenuKeyDown);
+  new ResizeObserver(() => renderTreemap()).observe(canvas);
+  document.getElementById("tree-body").addEventListener("keydown", onTreeKeyDown);
+  document.getElementById("treemap-root").addEventListener("click", treemapHome);
+  document.getElementById("treemap-up").addEventListener("click", treemapUp);
 
   // Listen for scan progress events
   EventsOn("scan:progress", onScanProgress);
@@ -249,6 +300,20 @@ async function doScan() {
   status.textContent = "扫描中...";
   progressBar.style.display = "block";
 
+  hideContextMenu();
+  selectionJobs.reset();
+  const generation = ++scanGeneration;
+  scanData = null;
+  treeStore.reset(null);
+  selectedTreeRow = null;
+  tmLayoutDirty = true;
+  selectedPath = null;
+  resetMediaPreview();
+  treeRowStates.clear();
+  document.getElementById("ai-selected").textContent = "";
+  document.getElementById("ai-body").innerHTML = '<div class="ai-placeholder">扫描完成后，选择文件查看详情</div>';
+  document.getElementById("action-info").textContent = "";
+  for (const id of ["recycle-btn", "explorer-btn", "uninstall-btn"]) document.getElementById(id).disabled = true;
   // Clear old data immediately
   document.getElementById("tree-body").innerHTML = '<div class="ai-placeholder">扫描中...</div>';
   document.getElementById("scan-summary").textContent = "";
@@ -259,6 +324,8 @@ async function doScan() {
   try {
     // Scan runs in Go; progress events fire via EventsOn
     const result = await Scan(path);
+    if (generation !== scanGeneration) return;
+    result.root = treeStore.reset(result.root);
     scanData = result;
 
     treemapFocus = result.root;
@@ -278,7 +345,7 @@ async function doScan() {
     status.textContent = "错误: " + err;
     progressBar.style.display = "none";
     document.getElementById("tree-body").innerHTML =
-      `<div class="ai-placeholder">扫描失败: ${err}</div>`;
+      `<div class="ai-placeholder">扫描失败: ${escapeHtml(String(err))}</div>`;
   } finally {
     btn.disabled = false;
   }
@@ -293,12 +360,18 @@ function renderTree(root) {
   // User clicks the toggle (▸) to expand.
   const rootRow = createTreeNode(root, 0, root.size);
   body.appendChild(rootRow.container);
+  rootRow.container.tabIndex = 0;
+  if (root.is_dir) toggleExpand(rootRow);
 }
 
 function createTreeNode(node, depth, parentSize) {
   const row = document.createElement("div");
   row.className = "tree-row";
   row.dataset.path = node.path;
+  row.title = node.path;
+  row.setAttribute("role", "treeitem");
+  row.setAttribute("aria-level", String(depth + 1));
+  row.tabIndex = -1;
   row.dataset.depth = depth;   // used by collapse to know where to stop
 
   const indent = document.createElement("span");
@@ -309,7 +382,7 @@ function createTreeNode(node, depth, parentSize) {
   toggle.className = "tree-toggle";
   // Show toggle for any directory that either has loaded children OR is
   // lazy-loadable (file_count > 0 but children pruned by backend).
-  const canExpand = node.is_dir && (node.file_count > 0 || (node.children && node.children.length > 0));
+  const canExpand = node.is_dir;
   if (canExpand) {
     toggle.textContent = "▸"; // collapsed
     toggle.style.cursor = "pointer";
@@ -339,6 +412,10 @@ function createTreeNode(node, depth, parentSize) {
 
   row.appendChild(indent);
   row.appendChild(toggle);
+  const kind = getFileKind(node);
+  row.dataset.kind = kind.id;
+  row.title = node.path + " · " + kind.label;
+  row.appendChild(createFileIcon(node));
   row.appendChild(name);
   row.appendChild(barContainer);
   row.appendChild(size);
@@ -347,10 +424,13 @@ function createTreeNode(node, depth, parentSize) {
   // State for expand/collapse
   const state = { container: row, expanded: false, toggle, node, depth };
   if (node.path) treeRowStates.set(pathKey(node.path), state);
+  if (node.is_dir) row.setAttribute("aria-expanded", "false");
 
   // Click on row: select this node (tree is the source, so it drives the Treemap)
+  row.addEventListener("contextmenu", event => openContextMenu(event, node, "tree"));
   row.addEventListener("click", (e) => {
     e.stopPropagation();
+    row.focus({ preventScroll: true });
     selectNode(node, { source: "tree" });
   });
 
@@ -363,128 +443,137 @@ function createTreeNode(node, depth, parentSize) {
     // Also allow clicking the row to toggle
     row.addEventListener("dblclick", (e) => {
       e.stopPropagation();
-      toggleExpand(state);
+      drillInto(node);
     });
   }
 
   return state;
 }
 
-async function toggleExpand(state) {
-  if (state.expanded) {
-    // Collapse: remove only THIS node's descendant rows. Stop as soon as we
-    // hit a sibling or ancestor (a row whose depth is <= our depth), so we
-    // never delete following siblings of the same level.
-    const container = state.container;
-    let next = container.nextElementSibling;
-    while (next) {
-      const nextDepth = parseInt(next.dataset.depth, 10);
-      // Stop at a sibling/ancestor (depth <= ours) or any row without a depth.
-      if (isNaN(nextDepth) || nextDepth <= state.depth) break;
-      const toRemove = next;
-      next = next.nextElementSibling;
-      // Unregister the row state so stale DOM refs never resurface.
-      if (toRemove.dataset.path) treeRowStates.delete(pathKey(toRemove.dataset.path));
-      toRemove.remove();
-    }
-    state.expanded = false;
-    state.toggle.textContent = "▸";
-  } else {
-    // Expand: insert children after this row.
-    // If children haven't been loaded yet (lazy tree), fetch from backend.
-    let children = state.node.children;
-    if ((!children || children.length === 0) && state.node.is_dir && state.node.file_count > 0) {
-      state.toggle.textContent = "◂";
-      try {
-        children = await GetChildren(state.node.path);
-        state.node.children = children;
-      } catch (err) {
-        state.toggle.textContent = "▸";
-        return;
-      }
-    }
-    if (!children || children.length === 0) {
-      state.toggle.textContent = "";
-      return;
-    }
-    const sorted = [...children].sort((a, b) => b.size - a.size);
-    const frag = document.createDocumentFragment();
-    for (const child of sorted) {
-      const childEl = createTreeNode(child, state.depth + 1, state.node.size);
-      frag.appendChild(childEl.container);
-    }
-    // Insert after the current row
-    state.container.after(frag);
-    state.expanded = true;
-    state.toggle.textContent = "▾";
+function collapseTreeRow(state) {
+  let next = state.container.nextElementSibling;
+  while (next && Number(next.dataset.depth) > state.depth) {
+    const remove = next; next = next.nextElementSibling;
+    treeRowStates.delete(pathKey(remove.dataset.path));
+    remove.remove();
   }
+  state.expanded = false;
+  state.toggle.textContent = "▸";
+  state.container.setAttribute("aria-expanded", "false");
 }
 
-function getBarColor(node) {
-  if (node.size > 10 * 1024 * 1024 * 1024) return "#d85a30";
-  if (node.size > 1 * 1024 * 1024 * 1024) return "#ba7517";
-  if (node.size > 100 * 1024 * 1024) return "#1d9e75";
-  return "#534ab7";
+async function toggleExpand(state) {
+  if (!state.container.isConnected) return;
+  if (state.loading) { state.cancelExpand = true; collapseTreeRow(state); return state.loading; }
+  if (state.expanded) { collapseTreeRow(state); return; }
+  state.cancelExpand = false;
+  const generation = scanGeneration;
+  state.loading = (async () => {
+    state.toggle.textContent = "…";
+    try {
+      const children = await treeStore.load(state.node);
+      if (generation !== scanGeneration || !state.container.isConnected || state.cancelExpand) return;
+      const sorted = [...children].sort((a, b) => b.size - a.size || a.name.localeCompare(b.name));
+      state.expanded = true;
+      state.container.setAttribute("aria-expanded", "true");
+      state.toggle.textContent = children.length ? "▾" : "";
+      let after = state.container;
+      // Yield between batches so wide directories do not block clicks/paint.
+      for (let offset = 0; offset < sorted.length; offset += 200) {
+        if (generation !== scanGeneration || !state.container.isConnected || !state.expanded || state.cancelExpand) return;
+        const fragment = document.createDocumentFragment();
+        for (const child of sorted.slice(offset, offset + 200)) {
+          const row = createTreeNode(child, state.depth + 1, state.node.size).container;
+          fragment.appendChild(row);
+        }
+        const last = fragment.lastElementChild;
+        // Preserve descendants if a visible child was expanded between batches.
+        while (after.nextElementSibling && Number(after.nextElementSibling.dataset.depth) > state.depth + 1) {
+          after = after.nextElementSibling;
+        }
+        after.after(fragment);
+        if (last) after = last;
+        if (offset + 200 < sorted.length) await new Promise(requestAnimationFrame);
+      }
+      setTreeSelection(selectedPath);
+    } catch (err) {
+      state.toggle.textContent = "▸";
+      state.container.title = "目录加载失败，点击重试：" + String(err);
+    }
+  })().finally(() => { state.loading = null; });
+  return state.loading;
 }
+
+function getBarColor(node) { return getFileKind(node).color; }
 
 // --- Selection + AI analysis (async, non-blocking) ---
 
-let aiRequestSeq = 0;
+function setTreeSelection(path) {
+  selectedTreeRow?.classList.remove("selected");
+  if (selectedTreeRow) { selectedTreeRow.tabIndex = -1; selectedTreeRow.setAttribute("aria-selected", "false"); }
+  const row = treeRowStates.get(pathKey(path))?.container;
+  selectedTreeRow = row?.isConnected ? row : null;
+  if (selectedTreeRow) { selectedTreeRow.classList.add("selected"); selectedTreeRow.tabIndex = 0; selectedTreeRow.setAttribute("aria-selected", "true"); }
+}
 
-async function selectNode(node, opts = {}) {
+const selectionJobs = createSelectionJobs({
+  analyze: AnalyzePath,
+  show: (node, result) => { renderAIPanel(node, result); updateActions(node, result); },
+  failure: (err) => { document.getElementById("ai-body").textContent = "分析失败：" + String(err); },
+  link: async (node, opts, stale) => {
+    if (stale()) return;
+    await Promise.all([
+      opts.source === "tree" ? Promise.resolve() : revealTreePath(node.path, stale),
+      opts.source === "treemap" ? renderTreemap() : ensureTreemapCovers(node.path, stale),
+    ]);
+    if (!stale()) { setTreeSelection(node.path); await renderTreemap(); }
+  },
+});
+
+function selectNode(node, opts = {}) {
+  if (!node?.path) return Promise.resolve();
+  node = treeStore.get(node.path) || node;
+  hideContextMenu();
   selectedPath = node.path;
-
-  // ---- Instant visual sync: tree row highlight + action bar state ----
-  document.querySelectorAll(".tree-row").forEach((r) => r.classList.remove("selected"));
-  const rowKey = pathKey(node.path);
-  let row = null;
-  const state = treeRowStates.get(rowKey);
-  if (state && state.container.isConnected) row = state.container;
-  else row = document.querySelector(`.tree-row[data-path="${CSS.escape(node.path)}"]`);
-  if (row) row.classList.add("selected");
-
-  // Action bar reacts immediately from the node itself — no waiting on AI.
+  setTreeSelection(node.path);
+  showMediaPreview(node);
   updateActionsInstant(node);
+  document.getElementById("ai-selected").textContent = node.name;
+  document.getElementById("ai-body").innerHTML = '<div class="ai-placeholder">正在分析，视图联动与预览可继续使用…</div>';
+  renderTreemap(); // cached base image + selection overlay; no AI wait
+  return selectionJobs.select(node, opts).catch(() => {});
+}
 
-  // Immediately show basic info (instant, no waiting)
-  const aiBody = document.getElementById("ai-body");
-  const aiSelected = document.getElementById("ai-selected");
-  aiSelected.textContent = node.name;
-
-  const seq = ++aiRequestSeq;
-  aiBody.innerHTML = '<div class="ai-placeholder">分析中...</div>';
-
-  try {
-    const result = await AnalyzePath(node.path);
-    // Check if a newer request superseded this one
-    if (seq !== aiRequestSeq) return;
-
-    renderAIPanel(node, result);
-    // Refine action bar with AI verdict (may relax/lock the recycle button).
-    updateActions(node, result);
-  } catch (err) {
-    if (seq !== aiRequestSeq) return;
-    aiBody.innerHTML = `<div class="ai-placeholder">分析失败: ${err}</div>`;
+async function onTreeKeyDown(event) {
+  const row = event.target.closest(".tree-row");
+  if (!row) return;
+  const state = treeRowStates.get(pathKey(row.dataset.path));
+  if (!state) return;
+  if (event.key === "ContextMenu" || (event.shiftKey && event.key === "F10")) {
+    const rect = row.getBoundingClientRect();
+    openContextMenu({ preventDefault: () => event.preventDefault(), stopPropagation: () => event.stopPropagation(), clientX: rect.left + 35, clientY: rect.bottom }, state.node, "tree");
+    return;
   }
-
-  // ---- Cross-panel linkage (async, non-blocking) ----
-  // Every step carries a stale-guard so a newer selection cancels in-flight
-  // linkage from an older one (e.g. rapid clicking while ancestors load).
-  const isStale = () => seq !== aiRequestSeq;
-  if (opts.source !== "tree") {
-    // Selection came from the Treemap (or elsewhere): reveal the tree row —
-    // expand ancestor rows lazily and scroll it into view.
-    revealTreePath(node.path, isStale).catch(() => {});
+  let next;
+  if (event.key === "ArrowDown") next = row.nextElementSibling;
+  else if (event.key === "ArrowUp") next = row.previousElementSibling;
+  else if (event.key === "ArrowRight" && state.node.is_dir) {
+    event.preventDefault();
+    if (!state.expanded) await toggleExpand(state);
+    else next = row.nextElementSibling;
+  } else if (event.key === "ArrowLeft") {
+    event.preventDefault();
+    if (state.expanded) await toggleExpand(state);
+    else next = treeRowStates.get(pathKey(parentPath(state.node.path)))?.container;
+  } else if (event.key === "Enter" && state.node.is_dir) {
+    event.preventDefault(); drillInto(state.node); return;
+  } else return;
+  if (next?.classList.contains("tree-row")) {
+    event.preventDefault(); next.focus({ preventScroll: true });
+    const target = treeRowStates.get(pathKey(next.dataset.path));
+    if (target) selectNode(target.node, { source: "tree" });
+    next.scrollIntoView({ block: "nearest", behavior: "instant" });
   }
-  if (opts.source !== "treemap") {
-    // Selection came from the tree: make sure the Treemap shows this block
-    // (drilling down through not-yet-loaded ancestors) and highlights it.
-    try {
-      await ensureTreemapCovers(node.path, isStale);
-    } catch (e) { /* best effort */ }
-    if (isStale()) return;
-  }
-  await highlightTreemap(node.path);
 }
 
 // Immediate action-bar state derived from the node alone (before AI returns).
@@ -500,11 +589,11 @@ function updateActionsInstant(node) {
   uninstallBtn.disabled = true;
 
   if (node.is_dir) {
-    recycleBtn.disabled = false;
+    recycleBtn.disabled = true;
     recycleBtn.textContent = "移到回收站 (谨慎)";
     info.textContent = `已选中文件夹 · ${formatSize(node.size)}${node.file_count ? " · " + formatCount(node.file_count) + " 项" : ""}`;
   } else {
-    recycleBtn.disabled = false;
+    recycleBtn.disabled = true;
     recycleBtn.textContent = "移到回收站";
     info.textContent = `已选中 · ${formatSize(node.size)}`;
   }
@@ -531,10 +620,13 @@ function renderAIPanel(node, analysis) {
 
   if (analysis.description) {
     const sourceBadge = analysis.source
-      ? `<span class="ai-source-badge ${analysis.source}">${sourceLabels[analysis.source] || analysis.source}</span>`
+      ? `<span class="ai-source-badge ${escapeHtml(["local", "ai-direct", "ai-license"].includes(analysis.source) ? analysis.source : "local")}">${escapeHtml(sourceLabels[analysis.source] || "Unknown")}</span>`
+      : "";
+    const cacheBadge = analysis.cached
+      ? `<span class="ai-source-badge cached">缓存</span>`
       : "";
     html += `<div class="ai-section">
-      <div class="ai-label">说明 ${sourceBadge}</div>
+      <div class="ai-label">说明 ${sourceBadge}${cacheBadge}</div>
       <div class="ai-value">${escapeHtml(analysis.description)}</div>
     </div>`;
   }
@@ -544,8 +636,8 @@ function renderAIPanel(node, analysis) {
   html += `<div class="ai-section">
     <div class="ai-label">清理建议</div>
     <div style="margin-bottom: 8px;">
-      <span class="safety-badge ${analysis.safety}">${safetyLabels[analysis.safety] || "未知"}</span>
-      <span style="margin-left: 8px; color: var(--text-tertiary); font-size: 11px;">${analysis.category || ""}</span>
+      <span class="safety-badge ${escapeHtml(["safe", "caution", "danger", "unknown"].includes(analysis.safety) ? analysis.safety : "unknown")}">${safetyLabels[analysis.safety] || "未知"}</span>
+      <span style="margin-left: 8px; color: var(--text-tertiary); font-size: 11px;">${escapeHtml(analysis.category || "")}</span>
     </div>
     <div class="ai-value">${escapeHtml(analysis.recommendation || "暂无建议")}</div>
   </div>`;
@@ -624,29 +716,39 @@ const TM_MAX_RECTS = 8000;           // hard cap on drawn rects (perf guard)
 const TM_MAX_DEPTH = 6;              // avoid exponential recursion on deep trees
 const TM_MAX_CHILDREN = 200;         // cap items per layout step (O(n²) guard)
 let tmRectCount = 0;
-let tmRenderFrame = 0;
-
-function treemapHome() {
-  if (!scanData || !scanData.root) return;
-  treemapFocus = scanData.root;
-  renderTreemap();
-}
-
-function renderTreemap() {
+let tmLayoutDirty = true;
+let tmLastFocus = null;
+let tmLastWidth = 0, tmLastHeight = 0, tmLastRatio = 0;
+let tmBaseCanvas = document.createElement("canvas");
+let tmRectsByPath = new Map();
+const scheduleTreemap = createFrameBatcher(requestAnimationFrame, () => {
   const canvas = document.getElementById("treemap-canvas");
   const rect = canvas.getBoundingClientRect();
-  if (rect.width === 0 || rect.height === 0) return Promise.resolve();
+  if (!rect.width || !rect.height) return;
+  const ratio = window.devicePixelRatio || 1;
+  if (tmLayoutDirty || tmLastFocus !== treemapFocus || tmLastWidth !== rect.width || tmLastHeight !== rect.height || tmLastRatio !== ratio) {
+    drawTreemapNow(canvas, rect);
+    tmBaseCanvas.width = canvas.width; tmBaseCanvas.height = canvas.height;
+    tmBaseCanvas.getContext("2d").drawImage(canvas, 0, 0);
+    tmRectsByPath = new Map(treemapRects.filter(r => r.node.path).map(r => [pathKey(r.node.path), r]));
+    tmLastFocus = treemapFocus; tmLastWidth = rect.width; tmLastHeight = rect.height; tmLastRatio = ratio;
+    tmLayoutDirty = false;
+  } else {
+    const ctx = canvas.getContext("2d");
+    ctx.save(); ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, canvas.width, canvas.height); ctx.drawImage(tmBaseCanvas, 0, 0); ctx.restore();
+  }
+  drawTreemapSelection();
+  updateTreemapNav();
+});
 
-  // Cancel any pending render so the latest focus wins.
-  if (tmRenderFrame) cancelAnimationFrame(tmRenderFrame);
-  return new Promise((resolve) => {
-    tmRenderFrame = requestAnimationFrame(() => {
-      tmRenderFrame = 0;
-      drawTreemapNow(canvas, rect);
-      resolve();
-    });
-  });
+function parentPath(path) { return normPath(path).replace(/[\\/][^\\/]+$/, "") || scanData?.root.path; }
+function treemapHome() { if (scanData?.root) drillInto(scanData.root); }
+function treemapUp() {
+  if (!scanData?.root || !treemapFocus || pathKey(treemapFocus.path) === pathKey(scanData.root.path)) return;
+  const parent = treeStore.get(parentPath(treemapFocus.path)) || scanData.root;
+  drillInto(parent);
 }
+function renderTreemap() { return scheduleTreemap(); }
 
 function drawTreemapNow(canvas, rect) {
   canvas.width = rect.width * window.devicePixelRatio;
@@ -719,8 +821,11 @@ function prepareChildren(node) {
   const kids = (node.children || []).slice().sort((a, b) => b.size - a.size);
   if (kids.length <= TM_MAX_CHILDREN) return kids;
 
-  const kept = kids.slice(0, TM_MAX_CHILDREN - 1);
-  const overflow = kids.slice(TM_MAX_CHILDREN - 1);
+  let kept = kids.slice(0, TM_MAX_CHILDREN - 1);
+  const target = kids.find(c => pathKey(c.path) === pathKey(selectedPath) || isDescendant(selectedPath, c.path));
+  if (target && !kept.includes(target)) kept = [...kept.slice(0, -1), target];
+  const keep = new Set(kept);
+  const overflow = kids.filter(c => !keep.has(c));
   const othersSize = overflow.reduce((s, c) => s + c.size, 0);
   const others = {
     name: `其他 ${overflow.length} 项`,
@@ -844,19 +949,6 @@ function worstRatio(row, rowWeight, total, w, h, isHorizontal) {
   return worst;
 }
 
-// Curated mid-saturation palette tuned for the dark theme.
-// Every block gets a hue from here — gray blocks are gone.
-const TM_PALETTE = [
-  "#2e9e77", "#3d7fd9", "#b0862c", "#8a6fd1", "#c96a3c", "#3f9fb5",
-  "#c4586f", "#6c9a34", "#5770e0", "#b57638", "#2fa3a0", "#a06298"
-];
-
-function tmHash(str) {
-  let h = 0;
-  for (let i = 0; i < str.length; i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
-  return h;
-}
-
 // --- Color helpers (hex-based, for neon gradients) ---
 function hexToRgb(hex) {
   const num = parseInt(hex.slice(1), 16);
@@ -887,17 +979,8 @@ function shadeHex(hex, amt) {
   return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, "0")}`;
 }
 
-// Base hue for a node (hex). Directories get a darker tint of their own hue;
-// files are keyed by extension with a per-file lightness jitter.
-function baseHexForNode(node) {
-  if (node.is_dir) {
-    return shadeHex(TM_PALETTE[tmHash(node.name) % TM_PALETTE.length], -46);
-  }
-  const ext = (node.name.split(".").pop() || "").toLowerCase();
-  const h = tmHash(ext || node.name);
-  const jitter = ((h >>> 7) % 25) - 12;
-  return shadeHex(TM_PALETTE[h % TM_PALETTE.length], jitter);
-}
+// Shared type colour: independent of name, directory, file size and scan order.
+function baseHexForNode(node) { return getFileKind(node).color; }
 
 // Corner radius for treemap blocks (auto-clamps to half the smallest side
 // so tiny slivers become pills instead of breaking).
@@ -994,8 +1077,8 @@ function drawRect(ctx, r) {
   if (r.w > 28 && r.h > 12) {
     ctx.textBaseline = "top";
     ctx.font = node.is_dir
-      ? "600 11px 'Segoe UI', 'Microsoft YaHei', sans-serif"
-      : "10px 'Segoe UI', 'Microsoft YaHei', sans-serif";
+      ? "600 13px 'Segoe UI', 'Microsoft YaHei', sans-serif"
+      : "12px 'Segoe UI', 'Microsoft YaHei', sans-serif";
     const name = node.name.length > 18 ? node.name.substring(0, 16) + "…" : node.name;
     // Shadow pass.
     ctx.fillStyle = "rgba(0,0,0,0.55)";
@@ -1004,7 +1087,7 @@ function drawRect(ctx, r) {
     ctx.fillStyle = "rgba(255,255,255,0.95)";
     ctx.fillText(name, r.x + 3, r.y + 2);
     if (r.h > 26) {
-      ctx.font = "9px 'Segoe UI', 'Microsoft YaHei', sans-serif";
+      ctx.font = "11px 'Segoe UI', 'Microsoft YaHei', sans-serif";
       ctx.fillStyle = "rgba(0,0,0,0.5)";
       ctx.fillText(formatSize(node.size), r.x + 3, r.y + 15);
       ctx.fillStyle = "rgba(255,255,255,0.72)";
@@ -1017,7 +1100,7 @@ function drawRect(ctx, r) {
 // drilled-open folder so the folder stays visible, plus an embossed frame.
 function drawFolderChrome(ctx, r) {
   const hdr = r.hdr || 12;
-  const hue = TM_PALETTE[tmHash(r.node.name) % TM_PALETTE.length];
+  const hue = getFileKind(r.node).color;
   const base = hexToRgb(hue);
   const bright = mixColor(base, { r: 255, g: 255, b: 255 }, 0.32);
   const deep = mixColor(base, { r: 6, g: 8, b: 16 }, 0.35);
@@ -1067,185 +1150,171 @@ function drawFolderChrome(ctx, r) {
 // Reveal a node's row in the directory tree: lazily expand every ancestor
 // (root -> target's parent) and scroll the target row into view. Idempotent —
 // already-expanded ancestors are skipped. Used when the Treemap drives selection.
-async function revealTreePath(path, isStale = () => false) {
-  if (!scanData || !scanData.root) return;
-  const rootPath = scanData.root.path;
-  if (path === rootPath || !isDescendant(path, rootPath)) {
-    scrollTreeRowIntoView(path);
-    return;
-  }
-
-  const segs = pathSegments(path, rootPath);
+async function revealTreePath(path, stale = () => false) {
+  if (!scanData?.root) return;
+  const existing = treeRowStates.get(pathKey(path));
+  if (existing?.container.isConnected) { setTreeSelection(path); scrollTreeRowIntoView(path); return; }
   let cur = scanData.root;
-  // Expand root, segs[0]-node, ..., segs[n-2]-node. After the loop, `cur` is
-  // the target and its row has just been inserted by the last expansion.
-  for (let i = 0; i < segs.length; i++) {
-    if (isStale()) return;
-    const st = treeRowStates.get(pathKey(cur.path));
-    if (!st) break;
-    if (!st.expanded) {
-      await toggleExpand(st);   // handles lazy GetChildren internally
-    }
-    const nextSeg = segs[i].toLowerCase();
-    const child = (cur.children || []).find(
-      (c) => c.name && c.name.toLowerCase() === nextSeg
-    );
-    if (!child) break;
-    cur = child;
+  for (const segment of pathSegments(path, cur.path)) {
+    if (stale()) return;
+    const state = treeRowStates.get(pathKey(cur.path));
+    if (!state) return;
+    if (state.loading) await state.loading;
+    if (stale()) return;
+    if (!state.expanded) await toggleExpand(state);
+    if (stale()) return;
+    cur = (cur.children || []).find(child => child.name.toLowerCase() === segment.toLowerCase());
+    if (!cur) return;
   }
-
-  if (isStale()) return;
-  scrollTreeRowIntoView(path);
+  if (!stale()) { setTreeSelection(path); scrollTreeRowIntoView(path); }
 }
 
 function scrollTreeRowIntoView(path) {
-  const st = treeRowStates.get(pathKey(path));
-  if (st && st.container.isConnected) {
-    st.container.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    return;
-  }
-  const row = document.querySelector(`.tree-row[data-path="${CSS.escape(path)}"]`);
-  if (row) row.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  treeRowStates.get(pathKey(path))?.container.scrollIntoView({ block: "nearest", behavior: "instant" });
 }
 
-// Ensure the Treemap's current focus rectangle covers `path`, drilling down
-// through any ancestors whose children haven't been lazy-loaded yet. The focus
-// ends on the target's parent, so the target itself is drawn as a block that
-// highlightTreemap() can then outline.
-async function ensureTreemapCovers(path, isStale = () => false) {
-  if (!scanData || !scanData.root) return;
-  const rootPath = scanData.root.path;
-  if (path !== rootPath && !isDescendant(path, rootPath)) return;
-
-  const segs = path === rootPath ? [] : pathSegments(path, rootPath);
-  if (segs.length === 0) {
-    // Target is the scan root — just park the focus at the root.
-    if (treemapFocus !== scanData.root) {
-      treemapFocus = scanData.root;
-      await renderTreemap();
-    }
-    return;
+async function ensureTreemapCovers(path, stale = () => false) {
+  if (stale()) return;
+  if (!scanData?.root) return;
+  const root = scanData.root;
+  if (pathKey(path) === pathKey(root.path)) { treemapFocus = root; return renderTreemap(); }
+  if (!isDescendant(path, root.path)) return;
+  if (tmLastFocus === treemapFocus && tmRectsByPath.has(pathKey(path))) return renderTreemap();
+  let cur = root;
+  const segments = pathSegments(path, root.path);
+  for (let i = 0; i < segments.length - 1; i++) {
+    await treeStore.load(cur);
+    if (stale()) return;
+    const next = cur.children.find(child => child.name.toLowerCase() === segments[i].toLowerCase());
+    if (!next) return;
+    cur = next;
   }
-
-  // Start from the deepest node that is already an ancestor of the target:
-  // the current treemap focus if it is one, otherwise the scan root.
-  let cur = scanData.root;
-  let startIdx = 0;
-  if (treemapFocus && treemapFocus !== scanData.root && isDescendant(path, treemapFocus.path)) {
-    cur = treemapFocus;
-    startIdx = pathSegments(treemapFocus.path, rootPath).length;
-  } else if (treemapFocus !== scanData.root) {
-    // Target lives outside the current (deeper) focus — zoom back to root.
-    treemapFocus = scanData.root;
-    await renderTreemap();
-  }
-
-  // Drill focus down one level per segment, stopping at the target's parent.
-  for (let i = startIdx; i < segs.length - 1; i++) {
-    if (isStale()) return;
-    if ((!cur.children || cur.children.length === 0) && cur.file_count > 0) {
-      try { cur.children = await GetChildren(cur.path); } catch (e) { return; }
-    }
-    const nextSeg = segs[i].toLowerCase();
-    const child = (cur.children || []).find(
-      (c) => c.name && c.name.toLowerCase() === nextSeg
-    );
-    if (!child) return;
-    cur = child;
-    // Pre-load the child's contents so the drilled frame is never empty.
-    if ((!cur.children || cur.children.length === 0) && cur.file_count > 0) {
-      try { cur.children = await GetChildren(cur.path); } catch (e) { /* continue */ }
-    }
-    if (treemapFocus !== cur) {
-      treemapFocus = cur;
-      await renderTreemap();
-    }
-  }
-
-  // Safety: if the loop ran zero times, the focus may not have its children
-  // loaded yet — load them so the target block actually gets drawn.
-  if (cur && (!cur.children || cur.children.length === 0) && cur.file_count > 0) {
-    try { cur.children = await GetChildren(cur.path); } catch (e) { /* best effort */ }
-  }
+  await treeStore.load(cur);
+  if (stale()) return;
+  treemapFocus = cur;
+  tmLayoutDirty = true;
+  await renderTreemap();
 }
 
-async function onTreemapClick(e) {
-  const canvas = document.getElementById("treemap-canvas");
-  const rect = canvas.getBoundingClientRect();
-  const x = e.clientX - rect.left;
-  const y = e.clientY - rect.top;
-  // Hit-test topmost-first (last drawn = on top). Skip the full-canvas base rect.
+function treemapHit(event) {
+  const box = document.getElementById("treemap-canvas").getBoundingClientRect();
+  const x = event.clientX - box.left, y = event.clientY - box.top;
   for (let i = treemapRects.length - 1; i >= 0; i--) {
     const r = treemapRects[i];
-    if (r.isBase) continue;
-    if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) {
-      if (r.node.is_dir) {
-        // Lazy-load children if not yet fetched, then drill in.
-        if ((!r.node.children || r.node.children.length === 0) && r.node.file_count > 0) {
-          try {
-            r.node.children = await GetChildren(r.node.path);
-          } catch (err) {
-            // Load failed — fall through to selectNode
-          }
-        }
-        if (r.node.children && r.node.children.length > 0) {
-          treemapFocus = r.node;
-          await renderTreemap();
-          // Drilling into a folder also selects it (two-way sync to the tree).
-          selectNode(r.node, { source: "treemap" });
-        } else if (r.node.path) {
-          selectNode(r.node, { source: "treemap" });
-        }
-      } else if (r.node.path) {
-        selectNode(r.node, { source: "treemap" });
-      }
-      return;
-    }
+    if (x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h) return r;
   }
 }
-
-async function highlightTreemap(path) {
-  await renderTreemap();
-  for (const r of treemapRects) {
-    if (r.node && r.node.path === path) {
-      const ctx = document.getElementById("treemap-canvas").getContext("2d");
-      // Neon selection: soft outer glow + a bright inner stroke (rounded).
-      ctx.save();
-      ctx.shadowColor = "rgba(93, 226, 190, 0.9)";
-      ctx.shadowBlur = 10;
-      ctx.strokeStyle = "rgba(93, 226, 190, 0.95)";
-      ctx.lineWidth = 2;
-      roundRectPath(ctx, r.x + 1, r.y + 1, r.w - 2, r.h - 2, TM_RADIUS);
-      ctx.stroke();
-      ctx.shadowBlur = 0;
-      ctx.strokeStyle = "rgba(255, 255, 255, 0.85)";
-      ctx.lineWidth = 1;
-      roundRectPath(ctx, r.x + 2.5, r.y + 2.5, r.w - 5, r.h - 5, TM_RADIUS);
-      ctx.stroke();
-      ctx.restore();
-      break;
-    }
-  }
+function onTreemapClick(event) {
+  const hit = treemapHit(event);
+  if (hit?.node.path) selectNode(hit.node, { source: "treemap" });
 }
-
+function onTreemapDoubleClick(event) {
+  const hit = treemapHit(event);
+  if (hit?.node.is_dir && hit.node.path) drillInto(hit.node);
+  else if (hit && !hit.node.path && treemapFocus) drillInto(treemapFocus);
+}
+async function drillInto(node) {
+  const generation = scanGeneration;
+  const selected = selectNode(node, { source: "treemap" });
+  const path = node.path;
+  try {
+    await treeStore.load(node);
+    if (generation !== scanGeneration || pathKey(selectedPath) !== pathKey(path)) return;
+    treemapFocus = treeStore.get(path) || node;
+    tmLayoutDirty = true;
+    await renderTreemap();
+    await selected;
+  } catch (err) { document.getElementById("scan-status").textContent = "目录加载失败，可重试"; }
+}
+function drawTreemapSelection() {
+  const r = tmRectsByPath.get(pathKey(selectedPath));
+  if (!r) return;
+  const ctx = document.getElementById("treemap-canvas").getContext("2d");
+  ctx.save(); ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 4;
+  roundRectPath(ctx, r.x + 2, r.y + 2, Math.max(1, r.w - 4), Math.max(1, r.h - 4), TM_RADIUS); ctx.stroke();
+  ctx.strokeStyle = "#00c389"; ctx.lineWidth = 2;
+  roundRectPath(ctx, r.x + 2, r.y + 2, Math.max(1, r.w - 4), Math.max(1, r.h - 4), TM_RADIUS); ctx.stroke(); ctx.restore();
+}
 function updateTreemapNav() {
   const nav = document.getElementById("treemap-nav");
-  if (!nav) return;
-  if (treemapFocus && scanData && treemapFocus.path !== scanData.root.path) {
-    nav.style.display = "inline-flex";
-    nav.querySelector(".treemap-crumb").textContent = treemapFocus.path;
-  } else {
-    nav.style.display = "none";
+  const crumbs = nav?.querySelector(".treemap-crumb");
+  if (!nav || !crumbs) return;
+  nav.style.display = "inline-flex";
+  const root = scanData?.root;
+  const focus = treemapFocus;
+  const signature = focus?.path || "";
+  if (crumbs.dataset.path !== signature) {
+    crumbs.dataset.path = signature;
+    crumbs.replaceChildren();
+    if (root && focus) {
+      let path = root.path;
+      const parts = [{ name: root.name || root.path, path }];
+      for (const name of pathSegments(focus.path, root.path)) { path = joinPath(path, name); parts.push({ name, path }); }
+      for (const part of parts) {
+        const button = document.createElement("button");
+        button.className = "treemap-breadcrumb"; button.textContent = part.name; button.title = part.path;
+        button.addEventListener("click", () => { const node = treeStore.get(part.path); if (node) drillInto(node); });
+        crumbs.append(button);
+      }
+    }
   }
+  const atRoot = !root || !focus || pathKey(focus.path) === pathKey(root.path);
+  document.getElementById("treemap-up").disabled = atRoot;
+  document.getElementById("treemap-root").disabled = atRoot;
+}
+
+// Context-menu actions always operate on the item that opened the menu.
+function hideContextMenu(restoreFocus = false) {
+  const menu = document.getElementById("file-context-menu");
+  if (!menu || menu.hidden) return;
+  menu.hidden = true;
+  contextTarget = null;
+  if (restoreFocus && contextReturnFocus?.isConnected) contextReturnFocus.focus({ preventScroll: true });
+}
+
+function openContextMenu(event, node, source) {
+  event.preventDefault();
+  event.stopPropagation();
+  if (!node?.path) return;
+  if (pathKey(selectedPath) !== pathKey(node.path)) selectNode(node, { source });
+  contextTarget = treeStore.get(node.path) || node;
+  contextReturnFocus = source === "tree" ? treeRowStates.get(pathKey(node.path))?.container : document.getElementById("treemap-canvas");
+  const menu = document.getElementById("file-context-menu");
+  document.getElementById("context-file-name").textContent = node.name;
+  menu.hidden = false;
+  menu.style.left = "0px";
+  menu.style.top = "0px";
+  const rect = menu.getBoundingClientRect();
+  menu.style.left = Math.max(8, Math.min(event.clientX, window.innerWidth - rect.width - 8)) + "px";
+  menu.style.top = Math.max(8, Math.min(event.clientY, window.innerHeight - rect.height - 8)) + "px";
+  menu.querySelector("button:not(:disabled)")?.focus({ preventScroll: true });
+}
+
+function onContextMenuKeyDown(event) {
+  const buttons = [...event.currentTarget.querySelectorAll("button:not(:disabled)")];
+  if (!buttons.length) return;
+  const index = buttons.indexOf(document.activeElement);
+  let next;
+  if (event.key === "ArrowDown") next = (index + 1) % buttons.length;
+  else if (event.key === "ArrowUp") next = (index - 1 + buttons.length) % buttons.length;
+  else if (event.key === "Home") next = 0;
+  else if (event.key === "End") next = buttons.length - 1;
+  else if (event.key === "Tab") { hideContextMenu(true); return; }
+  else return;
+  event.preventDefault();
+  buttons[next].focus();
 }
 
 // --- Actions ---
 
 async function doRecycle() {
-  if (!selectedPath) return;
-  if (!confirm(`确定将以下项目移到回收站？\n\n${selectedPath}`)) return;
+  if (!selectedPath || document.getElementById("recycle-btn").disabled) return;
+  const path = contextTarget?.path || selectedPath;
+  hideContextMenu();
+  if (!confirm(`确定将以下项目移到回收站？\n\n${path}`)) return;
   try {
-    await MoveToRecycleBin(selectedPath);
+    document.getElementById("recycle-btn").disabled = true;
+    await MoveToRecycleBin(path);
     document.getElementById("action-info").textContent = "已移到回收站";
     setTimeout(() => doScan(), 500);
   } catch (err) {
@@ -1254,18 +1323,22 @@ async function doRecycle() {
 }
 
 async function doExplorer() {
-  if (!selectedPath) return;
+  const path = contextTarget?.path || selectedPath;
+  if (!path) return;
+  hideContextMenu();
   try {
-    await OpenInExplorer(selectedPath);
+    await OpenInExplorer(path);
   } catch (err) {
     alert("无法打开: " + err);
   }
 }
 
 async function doUninstall() {
-  if (!selectedPath) return;
+  const path = contextTarget?.path || selectedPath;
+  if (!path || document.getElementById("uninstall-btn").disabled) return;
+  hideContextMenu();
   try {
-    const analysis = await AnalyzePath(selectedPath);
+    const analysis = await AnalyzePath(path);
     if (analysis.has_uninstaller) {
       if (confirm(`确定运行卸载程序？\n\n${analysis.uninstaller_path}`)) {
         await RunUninstaller(analysis.uninstaller_path);
@@ -1294,7 +1367,7 @@ function formatCount(n) {
 function escapeHtml(s) {
   const div = document.createElement("div");
   div.textContent = s;
-  return div.innerHTML;
+  return div.innerHTML.replaceAll('"', "&quot;").replaceAll("'", "&#39;");
 }
 
 function findNodeByPath(node, path) {

@@ -9,6 +9,7 @@
 <div id="app">
   <!-- Toolbar -->
   <div id="toolbar">
+    <div class="app-brand"><span class="brand-mark" aria-hidden="true">D</span><div><strong>DiskVisor</strong><small>磁盘空间，一目了然</small></div></div>
     <button id="browse-btn" class="btn btn-secondary">浏览...</button>
     <span id="path-display" class="path-display">未选择目录</span>
     <button id="scan-btn" class="btn btn-primary" disabled>扫描</button>
@@ -41,17 +42,19 @@
         <span>目录树</span>
         <span id="scan-summary"></span>
       </div>
-      <div id="tree-body"></div>
+      <div id="tree-body" role="tree" aria-label="目录树"></div>
     </div>
 
     <!-- Right: AI details -->
     <div id="ai-panel">
       <div id="ai-header" class="panel-header">
-        <span>AI 文件详情</span>
+        <span>文件预览与详情</span>
         <span id="ai-selected"></span>
       </div>
+      <div id="details-scroll"><section id="media-preview" class="media-preview" aria-label="媒体预览"><div class="preview-idle"><span class="preview-symbol" aria-hidden="true">▧</span><strong>先看看，再决定</strong><p>选择文本、图片或视频，即可在这里预览</p></div></section>
       <div id="ai-body">
         <div class="ai-placeholder">选中一个文件或文件夹查看详情</div>
+      </div>
       </div>
     </div>
   </div>
@@ -59,22 +62,26 @@
   <!-- Treemap -->
   <div id="treemap-panel">
     <div id="treemap-header" class="panel-header">
-      <span>Treemap 矩形树图</span>
+      <span>矩形树图 <small class="linkage-hint">单击联动 · 双击下钻 · 右键操作</small></span>
       <span id="treemap-nav" class="treemap-nav" style="display:none;">
         <span class="treemap-crumb"></span>
+        <button id="treemap-root" class="btn btn-secondary btn-sm">根目录</button>
         <button id="treemap-up" class="btn btn-secondary btn-sm">↑ 上级</button>
       </span>
     </div>
     <canvas id="treemap-canvas"></canvas>
+    <div id="file-color-legend" class="file-color-legend" role="list" aria-label="文件类型颜色图例"></div>
   </div>
 
-  <!-- Action bar -->
-  <div id="action-bar">
-    <button id="recycle-btn" class="btn btn-danger" disabled>移到回收站</button>
-    <button id="explorer-btn" class="btn btn-secondary" disabled>打开位置</button>
-    <button id="uninstall-btn" class="btn btn-secondary" disabled>卸载程序</button>
-    <div id="action-info"></div>
-  </div>
+</div>
+
+<div id="file-context-menu" class="file-context-menu" role="menu" aria-label="文件操作" hidden>
+  <div id="context-file-name" class="context-file-name"></div>
+  <button id="explorer-btn" role="menuitem" class="context-menu-item" disabled>打开位置</button>
+  <button id="uninstall-btn" role="menuitem" class="context-menu-item" disabled>卸载程序</button>
+  <div class="context-menu-separator" role="separator"></div>
+  <button id="recycle-btn" role="menuitem" class="context-menu-item context-menu-danger" disabled>移到回收站</button>
+  <div id="action-info" class="context-menu-info" role="status"></div>
 </div>
 
 <!-- Settings Modal -->

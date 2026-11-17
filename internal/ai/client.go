@@ -263,14 +263,14 @@ func (c *RemoteClient) AnalyzeViaLicense(path string) (*AnalysisResult, error) {
 
 func newAIResult(path, name string, info os.FileInfo, source string) *AnalysisResult {
 	return &AnalysisResult{
-		Path:    path,
-		Name:    name,
-		IsDir:   info.IsDir(),
-		Safety:  "unknown",
+		Path:     path,
+		Name:     name,
+		IsDir:    info.IsDir(),
+		Safety:   "unknown",
 		Category: "Unknown",
-		Action:  "unknown",
-		Matched: false,
-		Source:  source,
+		Action:   "unknown",
+		Matched:  false,
+		Source:   source,
 	}
 }
 
@@ -374,11 +374,21 @@ func parseAIContent(content string, result *AnalysisResult) {
 		return
 	}
 
-	result.Safety = parsed.Safety
+	switch parsed.Safety {
+	case "safe", "caution", "danger":
+		result.Safety = parsed.Safety
+	default:
+		result.Safety = "unknown"
+	}
 	result.Category = parsed.Category
 	result.Description = parsed.Description
 	result.Recommendation = parsed.Recommendation
-	result.Action = parsed.Action
+	switch parsed.Action {
+	case "delete", "keep", "uninstall", "command":
+		result.Action = parsed.Action
+	default:
+		result.Action = "unknown"
+	}
 }
 
 func detectUninstallerLocal(dirPath string, result *AnalysisResult) {

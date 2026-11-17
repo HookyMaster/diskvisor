@@ -37,7 +37,7 @@ type mftEntry struct {
 //	  +0x00  u32  AttributeType (0x30 = $FILE_NAME)
 //	  +0x04  u32  Length
 //	  +0x08  u8   NonResidentFlag
-//	  +0x16  u16  ResidentContentOffset (offset to content from attr start)
+//	  +0x14  u16  ResidentContentOffset (offset to content from attr start)
 //	$FILE_NAME content:
 //	  +0x00  u64  ParentDirectory (file reference)
 //	  +0x30  u64  FileSize
@@ -65,6 +65,11 @@ func parseRecord(buf []byte, recordIdx uint64) *mftEntry {
 
 	e := &mftEntry{frn: frn, isDir: isDir, inUse: true}
 
+	if firstAttr < 0x30 || firstAttr > len(buf)-8 {
+		return nil
+	}
+	dataSize := int64(-1)
+	bestNamespace := -1
 	off := firstAttr
 	for off+8 <= len(buf) {
 		attrType := binary.LittleEndian.Uint32(buf[off : off+4])
@@ -72,17 +77,24 @@ func parseRecord(buf []byte, recordIdx uint64) *mftEntry {
 			break
 		}
 		attrLen := binary.LittleEndian.Uint32(buf[off+4 : off+8])
-		if attrLen == 0 {
+		if attrLen < 0x18 || int(attrLen) > len(buf)-off {
 			break
+		}
+		if attrType == 0x80 && buf[off+9] == 0 { // unnamed $DATA
+			if buf[off+8] == 0 {
+				dataSize = int64(binary.LittleEndian.Uint32(buf[off+0x10 : off+0x14]))
+			} else if attrLen >= 0x40 {
+				dataSize = int64(binary.LittleEndian.Uint64(buf[off+0x30 : off+0x38]))
+			}
 		}
 		if attrType == 0x30 { // $FILE_NAME
 			if buf[off+8] != 0 { // non-resident: not expected for $FILE_NAME
 				off += int(attrLen)
 				continue
 			}
-			contentOff := int(binary.LittleEndian.Uint16(buf[off+0x16 : off+0x18]))
+			contentOff := int(binary.LittleEndian.Uint16(buf[off+0x14 : off+0x16]))
 			c := off + contentOff
-			if c+0x42 > len(buf) {
+			if contentOff < 0x18 || c+0x42 > off+int(attrLen) {
 				off += int(attrLen)
 				continue
 			}
@@ -91,7 +103,7 @@ func parseRecord(buf []byte, recordIdx uint64) *mftEntry {
 			fileAttr := binary.LittleEndian.Uint32(buf[c+0x38 : c+0x3C])
 			nameLen := int(buf[c+0x40])
 			nameNS := buf[c+0x41]
-			if nameLen > 0 && c+0x42+nameLen*2 <= len(buf) {
+			if nameLen > 0 && c+0x42+nameLen*2 <= off+int(attrLen) {
 				u16 := make([]uint16, nameLen)
 				for i := 0; i < nameLen; i++ {
 					u16[i] = binary.LittleEndian.Uint16(buf[c+0x42+i*2 : c+0x42+i*2+2])
@@ -99,7 +111,15 @@ func parseRecord(buf []byte, recordIdx uint64) *mftEntry {
 				name := string(utf16.Decode(u16))
 				// Prefer a Win32/long name (namespace != 0 POSIX). Keep the
 				// first name found, but upgrade if we encounter a non-POSIX one.
-				if e.name == "" || nameNS != 0 {
+				priority := 0
+				if nameNS == 0 {
+					priority = 1
+				}
+				if nameNS == 1 || nameNS == 3 {
+					priority = 2
+				}
+				if priority > bestNamespace {
+					bestNamespace = priority
 					e.name = name
 					e.parentFRN = parentFRN
 					e.size = fileSize
@@ -110,6 +130,9 @@ func parseRecord(buf []byte, recordIdx uint64) *mftEntry {
 		off += int(attrLen)
 	}
 
+	if dataSize >= 0 && !e.isDir {
+		e.size = dataSize
+	}
 	if e.name == "" {
 		return &mftEntry{frn: frn, isDir: isDir, inUse: true}
 	}
@@ -166,7 +189,7 @@ func buildSubtree(rootFRN uint64, rootPath string, entries map[uint64]*mftEntry)
 			e := entries[c]
 			child := &FileNode{
 				Name:  e.name,
-				Path:  parent.Path + "\\" + e.name,
+				Path:  strings.TrimRight(parent.Path, "\\/") + "\\" + e.name,
 				IsDir: e.isDir,
 				Size:  e.size,
 			}

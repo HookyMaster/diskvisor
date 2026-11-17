@@ -35,6 +35,7 @@ type AnalysisResult struct {
 	Matched         bool             `json:"matched"`           // whether a rule was matched
 	CleanableItems  []CleanableItem  `json:"cleanable_items"`   // for dirs: safe sub-items
 	Source          string           `json:"source"`            // "local" (rule engine), "ai-direct" (user's own key), "ai-license" (website proxy)
+	Cached          bool             `json:"cached"`            // true if returned from cache (path unchanged since last AI query)
 }
 
 // CleanableItem represents a child file/folder that can be safely cleaned.

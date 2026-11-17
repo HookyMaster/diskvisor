@@ -6,6 +6,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
+	"time"
 
 	"diskvisor/internal/ai"
 	"diskvisor/internal/config"
@@ -16,12 +18,28 @@ import (
 
 // App struct holds application state.
 type App struct {
+	treeMu    sync.RWMutex
+	previewMu sync.RWMutex
+	previews  map[string]string
 	ctx       context.Context
 	scanner   *scanner.Scanner
 	ai        *ai.Engine
 	cfg       *config.Config
 	fullRoot  *scanner.FileNode            // full scan tree, kept for lazy child loading
 	pathIndex map[string]*scanner.FileNode // dir path → node, for O(1) child lookups
+	aiCache   map[string]*aiCacheEntry     // path → cached AI analysis (skip re-query if unchanged)
+	aiMu      sync.RWMutex                 // guards aiCache
+}
+
+// aiCacheEntry stores a cached AI analysis result with a signature
+// (file modtime + size + config fingerprint). When the path's signature
+// matches on a subsequent call, the cached AI result is returned directly
+// without hitting the AI endpoint again.
+type aiCacheEntry struct {
+	result  *ai.AnalysisResult
+	modTime time.Time
+	size    int64
+	cfgSig  string // AI config fingerprint — config change invalidates cache
 }
 
 // NewApp creates a new App application struct.
@@ -33,6 +51,7 @@ func NewApp() *App {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.scanner = scanner.New()
+	a.aiCache = make(map[string]*aiCacheEntry)
 
 	engine, err := ai.New()
 	if err != nil {
@@ -60,6 +79,11 @@ func (a *App) GetConfig() *config.Config {
 // SaveConfig saves user configuration to disk.
 func (a *App) SaveConfig(cfg *config.Config) error {
 	a.cfg = cfg
+	// AI config may have changed (model, key, license) — invalidate cache
+	// so all analyses are re-queried with the new settings.
+	a.aiMu.Lock()
+	a.aiCache = make(map[string]*aiCacheEntry)
+	a.aiMu.Unlock()
 	return config.Save(cfg)
 }
 
@@ -105,13 +129,13 @@ type ScanResult struct {
 
 // ScanProgress is emitted via Wails events during scanning.
 type ScanProgress struct {
-	Stage       string  `json:"stage"`        // "counting", "scanning", "done", "error"
-	Current     string  `json:"current"`      // current path being scanned
-	FileCount   int64   `json:"file_count"`   // running file count
-	DirCount    int64   `json:"dir_count"`   // running dir count
-	Size        int64   `json:"size"`         // running total size
-	TotalFiles  int64   `json:"total_files"`  // estimated total files (from pass 1)
-	Percent     float64 `json:"percent"`      // 0-100 progress
+	Stage      string  `json:"stage"`       // "counting", "scanning", "done", "error"
+	Current    string  `json:"current"`     // current path being scanned
+	FileCount  int64   `json:"file_count"`  // running file count
+	DirCount   int64   `json:"dir_count"`   // running dir count
+	Size       int64   `json:"size"`        // running total size
+	TotalFiles int64   `json:"total_files"` // estimated total files (from pass 1)
+	Percent    float64 `json:"percent"`     // 0-100 progress
 }
 
 // Scan scans a directory and returns a size-annotated tree.
@@ -147,8 +171,13 @@ func (a *App) Scan(path string) (*ScanResult, error) {
 	// Keep the full tree for lazy child loading (GetChildren). The frontend
 	// only receives a shallow copy (2 levels) so JSON serialization stays
 	// small even for scans with millions of files.
+	a.treeMu.Lock()
 	a.fullRoot = root
 	a.pathIndex = scanner.BuildPathIndex(root)
+	a.treeMu.Unlock()
+	a.previewMu.Lock()
+	a.previews = make(map[string]string)
+	a.previewMu.Unlock()
 
 	var dirCount int64
 	countDirs(root, &dirCount)
@@ -179,6 +208,8 @@ func (a *App) Scan(path string) (*ScanResult, error) {
 // (its own children included, grandchildren as leaves) so a single call
 // gives the frontend two levels of content to render.
 func (a *App) GetChildren(path string) ([]scanner.FileNode, error) {
+	a.treeMu.RLock()
+	defer a.treeMu.RUnlock()
 	if a.fullRoot == nil {
 		return nil, fmt.Errorf("no scan data — run a scan first")
 	}
@@ -208,9 +239,33 @@ func (a *App) GetChildren(path string) ([]scanner.FileNode, error) {
 //   - User has own AI API Key → call AI directly (Path A)
 //   - User has License but no AI Key → call via website proxy (Path B)
 //   - Neither → return local rules result with a hint to configure
+//
+// Caching: AI-sourced results are cached keyed by path + file signature
+// (modtime + size) + AI config fingerprint. If the path hasn't changed
+// since the last AI query, the cached result is returned instantly
+// without hitting the AI endpoint. Local-only results are never cached
+// (they're instant anyway).
 func (a *App) AnalyzePath(path string) (*ai.AnalysisResult, error) {
 	if a.ai == nil {
 		return nil, fmt.Errorf("AI engine not initialized")
+	}
+
+	if _, err := validateCleanupTarget(path); err != nil {
+		return &ai.AnalysisResult{Path: path, Safety: "danger", Action: "keep", Source: "local", Description: err.Error(), Recommendation: "This location is protected from cleanup."}, nil
+	}
+
+	// --- Cache check: if the path is unchanged since the last AI query,
+	// return the cached result directly (skip both local rules and AI). ---
+	info, statErr := os.Stat(path)
+	if statErr == nil {
+		cfgSig := a.aiCfgSig()
+		a.aiMu.RLock()
+		entry, ok := a.aiCache[path]
+		a.aiMu.RUnlock()
+		if ok && entry.modTime.Equal(info.ModTime()) && entry.size == info.Size() && entry.cfgSig == cfgSig {
+			entry.result.Cached = true
+			return entry.result, nil
+		}
 	}
 
 	// Step 1: Run local rules engine (instant, adds cleanable items + uninstaller)
@@ -225,6 +280,9 @@ func (a *App) AnalyzePath(path string) (*ai.AnalysisResult, error) {
 	}
 
 	// Step 2: Determine AI path
+	if localResult.Safety == "danger" {
+		return localResult, nil
+	}
 	var aiResult *ai.AnalysisResult
 	var aiErr error
 
@@ -263,14 +321,46 @@ func (a *App) AnalyzePath(path string) (*ai.AnalysisResult, error) {
 		}
 	}
 
+	// Step 4: Cache the AI-sourced result for reuse on unchanged paths.
+	// Only cache successful AI results (not local-only, not errors).
+	if statErr == nil && aiResult != nil &&
+		(aiResult.Source == "ai-direct" || aiResult.Source == "ai-license") {
+		a.aiMu.Lock()
+		a.aiCache[path] = &aiCacheEntry{
+			result:  aiResult,
+			modTime: info.ModTime(),
+			size:    info.Size(),
+			cfgSig:  a.aiCfgSig(),
+		}
+		a.aiMu.Unlock()
+	}
+
 	return aiResult, nil
+}
+
+// ClearAICache empties the AI analysis cache. Call this after bulk file
+// operations (mass deletion, external cleanup) to force fresh analyses.
+func (a *App) ClearAICache() {
+	a.aiMu.Lock()
+	a.aiCache = make(map[string]*aiCacheEntry)
+	a.aiMu.Unlock()
+}
+
+// aiCfgSig returns a fingerprint of the AI-relevant config fields.
+// If the user changes AI key / model / license, this changes and
+// invalidates all cached results.
+func (a *App) aiCfgSig() string {
+	if a.cfg == nil {
+		return ""
+	}
+	return a.cfg.AIAPIKey + "|" + a.cfg.AIBaseURL + "|" + a.cfg.AIModel + "|" + a.cfg.LicenseKey
 }
 
 // --- File operations ---
 
 // MoveToRecycleBin sends a file or directory to the Windows Recycle Bin.
 func (a *App) MoveToRecycleBin(path string) error {
-	absPath, err := filepath.Abs(path)
+	absPath, err := validateCleanupTarget(path)
 	if err != nil {
 		return fmt.Errorf("resolve path: %w", err)
 	}
@@ -281,6 +371,9 @@ func (a *App) MoveToRecycleBin(path string) error {
 	}
 
 	// Use the native Windows API (no PowerShell, no console window).
+	if a.ai == nil || a.ai.Protects(absPath) {
+		return fmt.Errorf("local safety policy blocks cleanup of this path")
+	}
 	if err := moveToRecycleBinNative(absPath); err != nil {
 		return fmt.Errorf("recycle bin failed: %w", err)
 	}

@@ -18,6 +18,16 @@ type Engine struct {
 	rules []Rule
 }
 
+// Protects uses deterministic local policy only; remote advice cannot override it.
+func (e *Engine) Protects(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return true
+	}
+	rule := e.matchRule(path, filepath.Base(path), info.IsDir())
+	return rule != nil && rule.Safety == "danger"
+}
+
 // New creates a new AI engine with embedded rules loaded.
 func New() (*Engine, error) {
 	data, err := rulesFS.ReadFile("rules.json")
@@ -40,14 +50,14 @@ func (e *Engine) Analyze(path string) (*AnalysisResult, error) {
 
 	name := filepath.Base(path)
 	result := &AnalysisResult{
-		Path:       path,
-		Name:       name,
-		IsDir:      info.IsDir(),
-		Safety:     "unknown",
-		Category:   "Unknown",
-		Action:     "unknown",
-		Matched:    false,
-		Source:     "local",
+		Path:     path,
+		Name:     name,
+		IsDir:    info.IsDir(),
+		Safety:   "unknown",
+		Category: "Unknown",
+		Action:   "unknown",
+		Matched:  false,
+		Source:   "local",
 	}
 
 	// Try to match a rule

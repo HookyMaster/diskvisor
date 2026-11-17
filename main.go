@@ -2,6 +2,7 @@ package main
 
 import (
 	"embed"
+	"net/http"
 
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
@@ -17,11 +18,14 @@ func main() {
 
 	// Create application with options
 	err := wails.Run(&options.App{
-		Title:  "DiskVisor - AI 磁盘清理助手",
-		Width:  1200,
-		Height: 800,
+		Title:     "DiskVisor - AI 磁盘清理助手",
+		Width:     1360,
+		Height:    900,
+		MinWidth:  1000,
+		MinHeight: 720,
 		AssetServer: &assetserver.Options{
-			Assets: assets,
+			Assets:  assets,
+			Handler: http.HandlerFunc(app.serveMedia),
 		},
 		BackgroundColour: &options.RGBA{R: 30, G: 30, B: 30, A: 1},
 		OnStartup:        app.startup,

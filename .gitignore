@@ -10,3 +10,12 @@ frontend/package.json.md5
 .idea/
 .vscode/
 *.swp
+
+# 本地配置、凭据与临时构建文件
+.env
+.env.*
+!.env.example
+config.json
+*.syso
+*.exe
+*.log

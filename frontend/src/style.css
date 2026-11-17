@@ -550,6 +550,7 @@ body {
 .ai-source-badge.local { background: rgba(138, 111, 209, 0.18); color: #b39df0; border: 1px solid rgba(138, 111, 209, 0.45); }
 .ai-source-badge.ai-direct { background: var(--safe-bg); color: var(--accent-light); border: 1px solid rgba(47, 185, 143, 0.45); }
 .ai-source-badge.ai-license { background: var(--info-bg); color: #85b7eb; border: 1px solid rgba(61, 127, 217, 0.5); }
+.ai-source-badge.cached { background: rgba(180, 180, 180, 0.15); color: var(--text-tertiary); border: 1px solid rgba(128, 128, 128, 0.35); }
 
 /* ---------------- Treemap ---------------- */
 #treemap-panel {
@@ -559,10 +560,19 @@ body {
   border-top: 1px solid var(--border);
   flex-shrink: 0;
   background: var(--bg-primary);
+  /* Clip content so an oversized canvas can never paint over the action bar. */
+  overflow: hidden;
 }
 
 #treemap-canvas {
   flex: 1;
+  /* A canvas is a replaced element with an intrinsic 2:1 aspect ratio:
+     min-height:auto would force its height to width/2 (~hundreds of px),
+     overflowing the 248px panel and covering the action bar. min-height:0
+     lets flexbox allocate the real remaining space instead. */
+  min-height: 0;
+  min-width: 0;
+  display: block;
   cursor: pointer;
 }
 

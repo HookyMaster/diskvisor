@@ -37,6 +37,7 @@ export namespace ai {
 	    matched: boolean;
 	    cleanable_items: CleanableItem[];
 	    source: string;
+	    cached: boolean;
 	
 	    static createFrom(source: any = {}) {
 	        return new AnalysisResult(source);
@@ -58,6 +59,7 @@ export namespace ai {
 	        this.matched = source["matched"];
 	        this.cleanable_items = this.convertValues(source["cleanable_items"], CleanableItem);
 	        this.source = source["source"];
+	        this.cached = source["cached"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
@@ -133,6 +135,22 @@ export namespace config {
 
 export namespace main {
 	
+	export class MediaPreview {
+	    url: string;
+	    kind: string;
+	    name: string;
+	
+	    static createFrom(source: any = {}) {
+	        return new MediaPreview(source);
+	    }
+	
+	    constructor(source: any = {}) {
+	        if ('string' === typeof source) source = JSON.parse(source);
+	        this.url = source["url"];
+	        this.kind = source["kind"];
+	        this.name = source["name"];
+	    }
+	}
 	export class ScanResult {
 	    root?: scanner.FileNode;
 	    total_size: number;

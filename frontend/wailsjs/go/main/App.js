@@ -10,6 +10,10 @@ export function BrowseDirectory() {
   return window['go']['main']['App']['BrowseDirectory']();
 }
 
+export function ClearAICache() {
+  return window['go']['main']['App']['ClearAICache']();
+}
+
 export function GetChildren(arg1) {
   return window['go']['main']['App']['GetChildren'](arg1);
 }
@@ -20,6 +24,10 @@ export function GetCommonPaths() {
 
 export function GetConfig() {
   return window['go']['main']['App']['GetConfig']();
+}
+
+export function GetMediaPreview(arg1) {
+  return window['go']['main']['App']['GetMediaPreview'](arg1);
 }
 
 export function MoveToRecycleBin(arg1) {

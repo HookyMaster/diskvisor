@@ -6,6 +6,23 @@ import (
 	"unicode/utf16"
 )
 
+func TestParseTruncatedAttribute(t *testing.T) {
+	b := make([]byte, 64)
+	binary.LittleEndian.PutUint32(b, 0x454c4946)
+	binary.LittleEndian.PutUint16(b[0x16:], 1)
+	binary.LittleEndian.PutUint16(b[0x14:], 56)
+	binary.LittleEndian.PutUint32(b[56:], 0x30)
+	binary.LittleEndian.PutUint32(b[60:], 24)
+	// Must reject a header extending past the record without panicking.
+	parseRecord(b, 1)
+}
+
+func FuzzParseRecord(f *testing.F) {
+	f.Add(buildFileNameRecord(10, 1, false, 5, "hello.txt", 12345))
+	f.Add([]byte("FILE"))
+	f.Fuzz(func(t *testing.T, data []byte) { parseRecord(data, 10) })
+}
+
 // buildFileNameRecord constructs a synthetic MFT FILE record containing a
 // single resident $FILE_NAME attribute, so we can unit-test the offset math
 // in parseRecord without a real Windows volume.
@@ -28,7 +45,7 @@ func buildFileNameRecord(recordIdx uint64, seq uint16, isDir bool, parentFRN uin
 	// $FILE_NAME attribute (resident) starting at 0x38
 	attrStart := 0x38
 	le.PutUint32(buf[attrStart:attrStart+4], 0x30) // type $FILE_NAME
-	buf[attrStart+0x08] = 0 // non-resident = 0 (resident)
+	buf[attrStart+0x08] = 0                        // non-resident = 0 (resident)
 	contentOffset := uint16(0x18)
 	nameU16 := utf16.Encode([]rune(name))
 	nameLen := len(nameU16)
@@ -47,7 +64,7 @@ func buildFileNameRecord(recordIdx uint64, seq uint16, isDir bool, parentFRN uin
 
 	attrLen := uint32(0x18 + 0x42 + nameLen*2)
 	le.PutUint32(buf[attrStart+4:attrStart+8], attrLen)
-	le.PutUint16(buf[attrStart+0x16:attrStart+0x18], contentOffset)
+	le.PutUint16(buf[attrStart+0x14:attrStart+0x16], contentOffset)
 
 	// End-of-attributes marker
 	end := attrStart + int(attrLen)
