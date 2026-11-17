@@ -2,6 +2,12 @@
 
 Windows 磁盘空间分析与清理助手，使用 Go / Wails 和原生 JavaScript 构建。
 
+## 界面预览
+
+![DiskVisor：目录树、文件预览、右键菜单和矩形树图](docs/images/diskvisor-main.png)
+
+[下载最新 Windows 版本](https://github.com/HookyMaster/diskvisor/releases/latest)
+
 ## 当前功能
 
 - **空间分析**：目录树与 Canvas 矩形树图双向定位、高亮；目录按需加载并合并重复请求。单击选择，双击文件夹下钻。
